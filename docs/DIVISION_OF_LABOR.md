@@ -15,3 +15,5 @@ These are things such as moisture sensor. Not only do they have to be read,
 they also have to be id'd
 
 ## Overall Integration / Orchestration
+
+## Choice of chips
