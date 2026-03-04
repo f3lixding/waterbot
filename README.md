@@ -1,3 +1,9 @@
+# high level ideation
+
+A cluster / collection of ideas that are the foundation of this project. They
+are located in docs/, with docs/DOODLE.md being the highest level (or entry
+point) of the project
+
 # flake
 Some notes about the `flake.nix`.
 Flakes usually produce 2 main attributes: 
