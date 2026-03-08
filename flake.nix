@@ -4,33 +4,35 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    zig-overlay.url = "github:mitchellh/zig-overlay";
   };
 
   outputs =
     {
       self,
       nixpkgs,
+      zig-overlay,
       flake-utils,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ zig-overlay.overlays.default ];
+        };
+        nativeBuildInputs = [ pkgs.zigpkgs."0.15.2" ];
         zigTarget = "aarch64-linux-gnu";
         mkZigPkg =
           { name, src }:
           let
             stdenvFor =
-              if system == "x86_64-linux" then
-                pkgs.pkgsCross.aarch64-multiplatform.stdenv
-              else
-                pkgs.stdenv;
+              if system == "x86_64-linux" then pkgs.pkgsCross.aarch64-multiplatform.stdenv else pkgs.stdenv;
           in
           stdenvFor.mkDerivation {
             pname = name;
             version = "0.0.0";
-            inherit src;
-            nativeBuildInputs = [ pkgs.zig ];
+            inherit src nativeBuildInputs;
             buildPhase = ''
               export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
               export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-cache-local"
@@ -41,26 +43,22 @@
           };
         pkgsDir = ./pkgs;
         pkgsEntries = builtins.readDir pkgsDir;
-        pkgNames =
-          builtins.filter
-            (name:
-              pkgsEntries.${name} == "directory"
-              && builtins.pathExists (pkgsDir + "/${name}/build.zig"))
-            (builtins.attrNames pkgsEntries);
-        zigPackages =
-          builtins.listToAttrs (
-            map (name: {
+        pkgNames = builtins.filter (
+          name: pkgsEntries.${name} == "directory" && builtins.pathExists (pkgsDir + "/${name}/build.zig")
+        ) (builtins.attrNames pkgsEntries);
+        zigPackages = builtins.listToAttrs (
+          map (name: {
+            inherit name;
+            value = mkZigPkg {
               inherit name;
-              value = mkZigPkg {
-                inherit name;
-                src = pkgsDir + "/${name}";
-              };
-            }) pkgNames
-          );
+              src = pkgsDir + "/${name}";
+            };
+          }) pkgNames
+        );
         defaultPkgName =
           if builtins.hasAttr "main_compute" zigPackages then
             "main_compute"
-          else if pkgNames != [] then
+          else if pkgNames != [ ] then
             builtins.head pkgNames
           else
             null;
@@ -78,19 +76,15 @@
         };
       in
       {
-        packages = zigPackages
-          // (
-            if defaultPkgName == null then
-              { }
-            else
-              { default = zigPackages.${defaultPkgName}; }
-          );
+        packages =
+          zigPackages
+          // (if defaultPkgName == null then { } else { default = zigPackages.${defaultPkgName}; });
 
         apps.build = flake-utils.lib.mkApp { drv = buildApp; };
         apps.deploy = flake-utils.lib.mkApp { drv = deployApp; };
 
         devShells.default = pkgs.mkShell {
-
+          inherit nativeBuildInputs;
           shellHook = ''
             exec ${pkgs.zsh}/bin/zsh
           '';
