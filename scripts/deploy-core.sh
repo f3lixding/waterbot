@@ -9,12 +9,14 @@ Usage:
 Options:
   --mode <package|nixos>      Build/deploy a package (default) or a NixOS system.
   --flake-attr <attr>         Flake attribute to build/deploy (default: default).
+  --pkg <name>                Package folder under pkgs/ (shorthand for --flake-attr).
   --target-host <host>        Target host for deployment (required for deploy).
   --target-user <user>        Target SSH user (default: pi).
 
 Examples:
   deploy-core.sh build --mode package --flake-attr default
-  deploy-core.sh deploy --mode package --flake-attr default --target-host raspberrypi.local
+  deploy-core.sh build --mode package --pkg main_compute
+  deploy-core.sh deploy --mode package --pkg main_compute --target-host raspberrypi.local
   deploy-core.sh deploy --mode nixos --flake-attr pi --target-host raspberrypi.local
 EOF
 }
@@ -29,6 +31,7 @@ shift
 
 mode="package"
 flake_attr="default"
+pkg_name=""
 target_host=""
 target_user="pi"
 
@@ -40,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --flake-attr)
       flake_attr="$2"
+      shift 2
+      ;;
+    --pkg)
+      pkg_name="$2"
       shift 2
       ;;
     --target-host)
@@ -72,6 +79,10 @@ if [[ "$mode" != "package" && "$mode" != "nixos" ]]; then
   echo "Unknown mode: $mode" >&2
   print_usage
   exit 2
+fi
+
+if [[ -n "$pkg_name" ]]; then
+  flake_attr="$pkg_name"
 fi
 
 if [[ "$command" == "deploy" && -z "$target_host" ]]; then

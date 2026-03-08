@@ -17,13 +17,20 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         zigTarget = "aarch64-linux-gnu";
-        mkMainCompute =
-          { stdenv, zig }:
-          stdenv.mkDerivation {
-            pname = "main_compute";
+        mkZigPkg =
+          { name, src }:
+          let
+            stdenvFor =
+              if system == "x86_64-linux" then
+                pkgs.pkgsCross.aarch64-multiplatform.stdenv
+              else
+                pkgs.stdenv;
+          in
+          stdenvFor.mkDerivation {
+            pname = name;
             version = "0.0.0";
-            src = ./pkgs/main_compute;
-            nativeBuildInputs = [ zig ];
+            inherit src;
+            nativeBuildInputs = [ pkgs.zig ];
             buildPhase = ''
               export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
               export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-cache-local"
@@ -32,17 +39,31 @@
             '';
             installPhase = "true";
           };
-        mainCompute =
-          if system == "x86_64-linux" then
-            mkMainCompute {
-              stdenv = pkgs.pkgsCross.aarch64-multiplatform.stdenv;
-              zig = pkgs.zig;
-            }
+        pkgsDir = ./pkgs;
+        pkgsEntries = builtins.readDir pkgsDir;
+        pkgNames =
+          builtins.filter
+            (name:
+              pkgsEntries.${name} == "directory"
+              && builtins.pathExists (pkgsDir + "/${name}/build.zig"))
+            (builtins.attrNames pkgsEntries);
+        zigPackages =
+          builtins.listToAttrs (
+            map (name: {
+              inherit name;
+              value = mkZigPkg {
+                inherit name;
+                src = pkgsDir + "/${name}";
+              };
+            }) pkgNames
+          );
+        defaultPkgName =
+          if builtins.hasAttr "main_compute" zigPackages then
+            "main_compute"
+          else if pkgNames != [] then
+            builtins.head pkgNames
           else
-            mkMainCompute {
-              stdenv = pkgs.stdenv;
-              zig = pkgs.zig;
-            };
+            null;
         buildApp = pkgs.writeShellApplication {
           name = "waterbot-build";
           text = ''
@@ -57,8 +78,13 @@
         };
       in
       {
-        packages.main_compute = mainCompute;
-        packages.default = mainCompute;
+        packages = zigPackages
+          // (
+            if defaultPkgName == null then
+              { }
+            else
+              { default = zigPackages.${defaultPkgName}; }
+          );
 
         apps.build = flake-utils.lib.mkApp { drv = buildApp; };
         apps.deploy = flake-utils.lib.mkApp { drv = deployApp; };
