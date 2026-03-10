@@ -22,7 +22,8 @@
           overlays = [ zig-overlay.overlays.default ];
         };
 
-        nativeBuildInputs = [ pkgs.zigpkgs."0.15.2" ];
+        zig = pkgs.zigpkgs."0.15.2";
+        nativeBuildInputs = [ zig ];
 
         # Because we are building this for raspberry pi 5
         zigTarget = "aarch64-linux-gnu";
@@ -33,17 +34,23 @@
             stdenvFor =
               if system == "x86_64-linux" then pkgs.pkgsCross.aarch64-multiplatform.stdenv else pkgs.stdenv;
 
-            zigDeps = import pkgs/${name}/build.zig.zon.nix {
-              inherit (pkgs)
-                lib
-                linkFarm
-                fetchurl
-                fetchgit
-                runCommandLocal
-                ;
-              inherit (pkgs) zig; # we might need to change this to keep it consistent with what is specified in nativeBuildInputs
-              name = "zig-packages";
-            };
+            zigDepsFile = pkgsDir + "/${name}/build.zig.zon.nix";
+            zigDeps =
+              if builtins.pathExists zigDepsFile then
+                import zigDepsFile {
+                  inherit (pkgs)
+                    lib
+                    linkFarm
+                    fetchurl
+                    fetchgit
+                    runCommandLocal
+                    ;
+                  inherit zig;
+                  name = "zig-packages";
+                }
+              else
+                null;
+            zigDepsPath = if zigDeps == null then "" else toString zigDeps;
           in
           stdenvFor.mkDerivation {
             pname = name;
@@ -52,19 +59,19 @@
             inherit src nativeBuildInputs;
 
             preBuild = ''
-              export ZIG_GLOBAL_CACHE_DIR=$PWD/zig-cache # might also need to change this since it looks like every pkg folder has their own zig cache
-              # Set up Zig dependency cache
-              mkdir -p $ZIG_GLOBAL_CACHE_DIR/p
-              find ${zigDeps} -maxdepth 1 -type l | while read dep; do
-                ln -sf $(readlink "$dep") "$ZIG_GLOBAL_CACHE_DIR/p/$(basename "$dep")"
-              done
+              export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+              export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-cache-local"
+              mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+              if [ -n "${zigDepsPath}" ]; then
+                mkdir -p "$ZIG_GLOBAL_CACHE_DIR/p"
+                find ${zigDepsPath} -maxdepth 1 -type l | while read dep; do
+                  ln -sf $(readlink "$dep") "$ZIG_GLOBAL_CACHE_DIR/p/$(basename "$dep")"
+                done
+              fi
             '';
 
             buildPhase = ''
               runHook preBuild
-              export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
-              export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-cache-local"
-              mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
               zig build -Dtarget=${zigTarget} -Doptimize=ReleaseSafe -p "$out"
             '';
 
