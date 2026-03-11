@@ -7,7 +7,6 @@ Usage:
   deploy-core.sh <build|deploy> [options]
 
 Options:
-  --mode <package|nixos>      Build/deploy a package (default) or a NixOS system.
   --flake-attr <attr>         Flake attribute to build/deploy (default: default).
   --pkg <name>                Package folder under pkgs/ (shorthand for --flake-attr).
   --target-host <host>        Target host for deployment (required for deploy).
@@ -15,10 +14,9 @@ Options:
   --target-dir <dir>          Target directory for package deploy (default: ~/.local/bin).
 
 Examples:
-  deploy-core.sh build --mode package --flake-attr default
-  deploy-core.sh build --mode package --pkg main_compute
-  deploy-core.sh deploy --mode package --pkg main_compute --target-host raspberrypi.local
-  deploy-core.sh deploy --mode nixos --flake-attr pi --target-host raspberrypi.local
+  deploy-core.sh build --flake-attr default
+  deploy-core.sh build --pkg main_compute
+  deploy-core.sh deploy --pkg main_compute --target-host raspberrypi.local
 EOF
 }
 
@@ -30,19 +28,15 @@ fi
 command="$1"
 shift
 
-mode="package"
 flake_attr="default"
 pkg_name=""
 target_host=""
 target_user="pi"
-target_dir="~/.local/bin"
+target_dir="~/.local/bin/waterbot"
+target_dir_bak="~/.local/bin/waterbot_bak"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --mode)
-      mode="$2"
-      shift 2
-      ;;
     --flake-attr)
       flake_attr="$2"
       shift 2
@@ -81,12 +75,6 @@ if [[ "$command" != "build" && "$command" != "deploy" ]]; then
   exit 2
 fi
 
-if [[ "$mode" != "package" && "$mode" != "nixos" ]]; then
-  echo "Unknown mode: $mode" >&2
-  print_usage
-  exit 2
-fi
-
 if [[ -n "$pkg_name" ]]; then
   flake_attr="$pkg_name"
 fi
@@ -96,34 +84,29 @@ if [[ "$command" == "deploy" && -z "$target_host" ]]; then
   exit 2
 fi
 
-if [[ "$mode" == "package" ]]; then
-  nix build ".#${flake_attr}"
+nix build ".#${flake_attr}"
 
-  if [[ "$command" == "deploy" ]]; then
-    if [[ ! -d "./result/bin" ]]; then
-      echo "Expected ./result/bin to exist after build" >&2
-      exit 1
-    fi
-
-    shopt -s nullglob
-    bin_files=(./result/bin/*)
-    shopt -u nullglob
-
-    if [[ ${#bin_files[@]} -eq 0 ]]; then
-      echo "No files found in ./result/bin to deploy" >&2
-      exit 1
-    fi
-
-    ssh "${target_user}@${target_host}" "mkdir -p ${target_dir}"
-    scp "${bin_files[@]}" "${target_user}@${target_host}:${target_dir}/"
+if [[ "$command" == "deploy" ]]; then
+  if [[ ! -d "./result/bin" ]]; then
+    echo "Expected ./result/bin to exist after build" >&2
+    exit 1
   fi
-else
-  if [[ "$command" == "build" ]]; then
-    nix build ".#nixosConfigurations.${flake_attr}.config.system.build.toplevel"
-  else
-    nixos-rebuild switch \
-      --flake ".#${flake_attr}" \
-      --target-host "${target_user}@${target_host}" \
-      --build-host localhost
+
+  shopt -s nullglob
+  bin_files=(./result/bin/*)
+  shopt -u nullglob
+
+  if [[ ${#bin_files[@]} -eq 0 ]]; then
+    echo "No files found in ./result/bin to deploy" >&2
+    exit 1
   fi
+
+  # back up first and then move
+  ssh "${target_user}@${target_host}" "mkdir -p ${target_dir_bak}"
+  ssh "${target_user}@${target_host}" "mkdir -p ${target_dir}"
+  ssh "${target_user}@${target_host}" \
+    "bash -lc 'shopt -s nullglob; files=(${target_dir}/*); if (( \${#files[@]} )); then cp -r ${target_dir}/* ${target_dir_bak}/; fi'"
+  scp "${bin_files[@]}" "${target_user}@${target_host}:${target_dir}/"
+
+  # TODO: kill existing process (if any) and then restart the process 
 fi
