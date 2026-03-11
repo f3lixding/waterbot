@@ -15,6 +15,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const shared: []const SharedDeps = &[_]SharedDeps{
+        .{ .import_name = "httpz", .module_name = "httpz", .dep = httpz },
+    };
+
     const main_bin = b.addExecutable(.{
         .name = "main_compute",
         .root_module = b.createModule(.{
@@ -24,11 +28,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const shared: []const SharedDeps = &[_]SharedDeps{
-        .{ .import_name = "httpz", .module_name = "httpz", .dep = httpz },
-    };
-
-    addSharedDeps(main_bin, shared[0..]);
+    addSharedDeps(main_bin, shared);
 
     b.installArtifact(main_bin);
 

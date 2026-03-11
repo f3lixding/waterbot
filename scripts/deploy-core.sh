@@ -12,6 +12,7 @@ Options:
   --pkg <name>                Package folder under pkgs/ (shorthand for --flake-attr).
   --target-host <host>        Target host for deployment (required for deploy).
   --target-user <user>        Target SSH user (default: pi).
+  --target-dir <dir>          Target directory for package deploy (default: ~/.local/bin).
 
 Examples:
   deploy-core.sh build --mode package --flake-attr default
@@ -34,6 +35,7 @@ flake_attr="default"
 pkg_name=""
 target_host=""
 target_user="pi"
+target_dir="~/.local/bin"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,6 +57,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --target-user)
       target_user="$2"
+      shift 2
+      ;;
+    --target-dir)
+      target_dir="$2"
       shift 2
       ;;
     -h|--help)
@@ -94,7 +100,22 @@ if [[ "$mode" == "package" ]]; then
   nix build ".#${flake_attr}"
 
   if [[ "$command" == "deploy" ]]; then
-    nix copy --to "ssh://${target_user}@${target_host}" ./result
+    if [[ ! -d "./result/bin" ]]; then
+      echo "Expected ./result/bin to exist after build" >&2
+      exit 1
+    fi
+
+    shopt -s nullglob
+    bin_files=(./result/bin/*)
+    shopt -u nullglob
+
+    if [[ ${#bin_files[@]} -eq 0 ]]; then
+      echo "No files found in ./result/bin to deploy" >&2
+      exit 1
+    fi
+
+    ssh "${target_user}@${target_host}" "mkdir -p ${target_dir}"
+    scp "${bin_files[@]}" "${target_user}@${target_host}:${target_dir}/"
   fi
 else
   if [[ "$command" == "build" ]]; then
