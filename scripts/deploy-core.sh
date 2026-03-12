@@ -108,5 +108,7 @@ if [[ "$command" == "deploy" ]]; then
     "bash -lc 'shopt -s nullglob; files=(${target_dir}/*); if (( \${#files[@]} )); then cp -r ${target_dir}/* ${target_dir_bak}/; fi'"
   scp "${bin_files[@]}" "${target_user}@${target_host}:${target_dir}/"
 
-  # TODO: kill existing process (if any) and then restart the process 
+  # restart the process
+  ssh "${target_user}@${target_host}" "pkill -9 main_compute >/dev/null 2>&1 || true"
+  ssh "${target_user}@${target_host}" "nohup \"${target_dir}/main_compute\" >/dev/null 2>&1 &"
 fi
