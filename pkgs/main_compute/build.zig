@@ -45,6 +45,20 @@ pub fn build(b: *std.Build) void {
     addSharedDeps(test_bin, shared);
 
     b.installArtifact(test_bin);
+
+    // Tests
+    const test_entry = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .optimize = optimize,
+            .target = target,
+        }),
+    });
+    addSharedDeps(test_entry, shared);
+
+    const test_run = b.addRunArtifact(test_entry);
+    const test_step = b.step("test", "runs tests");
+    test_step.dependOn(&test_run.step);
 }
 
 fn addSharedDeps(c: *std.Build.Step.Compile, deps: []const SharedDeps) void {

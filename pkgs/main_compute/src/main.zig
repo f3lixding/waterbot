@@ -23,3 +23,7 @@ pub fn main() !void {
 fn onMessage(_: ?*anyopaque, msg: []const u8) !void {
     std.debug.print("recv: {s}\n", .{msg});
 }
+
+test {
+    _ = @import("channel.zig");
+}
