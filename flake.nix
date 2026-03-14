@@ -23,7 +23,10 @@
         };
 
         zig = pkgs.zigpkgs."0.15.2";
-        nativeBuildInputs = [ zig ];
+        nativeBuildInputs = [
+          zig
+          pkgs.zls_0_15
+        ];
 
         # Because we are building this for raspberry pi 5
         zigTarget = "aarch64-linux-gnu";

@@ -4,7 +4,9 @@ const httpz = @import("httpz");
 const Allocator = std.mem.Allocator;
 const PORT: u16 = 8888;
 
-pub fn run(allocator: Allocator) !void {
+pub fn run(allocator: Allocator, socket_path: []const u8) !void {
+    _ = socket_path;
+
     var server = try httpz.Server(void).init(allocator, .{
         .address = .all(PORT),
     }, {});
@@ -36,6 +38,7 @@ fn serveHome(_: *httpz.Request, res: *httpz.Response) !void {
 }
 
 pub fn main() void {
+    const SOCKET_PATH = "/tmp/main_compute.sock";
     const allocator = std.heap.page_allocator;
-    run(allocator) catch unreachable;
+    run(allocator, SOCKET_PATH) catch unreachable;
 }
