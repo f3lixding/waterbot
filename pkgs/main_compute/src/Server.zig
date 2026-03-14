@@ -31,6 +31,7 @@ const Client = struct {
         try self.conn.write("connected");
     }
 
+    // This is a method expected by httpz
     pub fn clientMessage(self: *Client, data: []const u8) !void {
         if (!std.mem.eql(u8, data, "left") and !std.mem.eql(u8, data, "right")) {
             try self.conn.write("expected 'left' or 'right'");

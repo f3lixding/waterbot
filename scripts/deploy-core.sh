@@ -101,14 +101,15 @@ if [[ "$command" == "deploy" ]]; then
     exit 1
   fi
 
-  # back up first and then move
-  ssh "${target_user}@${target_host}" "mkdir -p ${target_dir_bak}"
-  ssh "${target_user}@${target_host}" "mkdir -p ${target_dir}"
+  staged_target_dir="${target_dir}.next"
+
+  # stage the new build in a fresh directory, then swap it into place remotely
   ssh "${target_user}@${target_host}" \
-    "bash -lc 'shopt -s nullglob; files=(${target_dir}/*); if (( \${#files[@]} )); then cp -r ${target_dir}/* ${target_dir_bak}/; fi'"
-  scp "${bin_files[@]}" "${target_user}@${target_host}:${target_dir}/"
+    "bash -lc 'rm -rf ${staged_target_dir}; mkdir -p ${staged_target_dir}'"
+  scp "${bin_files[@]}" "${target_user}@${target_host}:${staged_target_dir}/"
 
   # restart the process
   ssh "${target_user}@${target_host}" "pkill -9 main_compute >/dev/null 2>&1 || true"
-  ssh "${target_user}@${target_host}" "nohup \"${target_dir}/main_compute\" >/dev/null 2>&1 &"
+  ssh "${target_user}@${target_host}" \
+    "bash -lc 'rm -rf ${target_dir_bak}; if [[ -e ${target_dir} ]]; then mv ${target_dir} ${target_dir_bak}; fi; mv ${staged_target_dir} ${target_dir}; nohup ${target_dir}/main_compute >/dev/null 2>&1 &'"
 fi
