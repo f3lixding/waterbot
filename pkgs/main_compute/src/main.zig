@@ -5,6 +5,7 @@ const main_compute = @import("main_compute");
 const Streamer = @import("Streamer.zig");
 const Spsc = @import("channel.zig").Spsc(usize);
 const Tx = Spsc.Tx;
+const Rx = Spsc.Rx;
 
 const SOCKET_PATH: []const u8 = "/tmp/main_compute.sock";
 
@@ -38,11 +39,21 @@ fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
     try streamer.listenAndExecute(&buf, &tx_ctx, onMessage);
 }
 
+fn mainLoop(rx: Rx) !void {
+    while (true) {
+        const received = rx.recv() catch unreachable;
+        std.debug.print("recevied through spsc: {d}\n", .{received});
+    }
+}
+
 /// The entry point to main compute, which has the following responsibilities:
 ///
 /// - Prime and prep the UDS socket - Spawn the http server in a thread (or a
-/// process, pending future developement) - Spawn the dispatch thread -
-/// Initiate the main loop routine (this is the brain that actually affects the
+/// process, pending future developement)
+///
+/// - Spawn the dispatch thread
+///
+/// - Initiate the main loop routine (this is the brain that actually affects the
 /// GPIOs)
 pub fn main() !void {
     var streamer = try preStart();
@@ -63,8 +74,7 @@ pub fn main() !void {
     const dispatch_thread = try std.Thread.spawn(.{}, spawnDispatcher, .{ tx, streamer });
     defer dispatch_thread.join();
 
-    const received = rx.recv() catch unreachable;
-    std.debug.print("recevied through spsc: {d}\n", .{received});
+    try mainLoop(rx);
 }
 
 test {

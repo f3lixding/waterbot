@@ -1,0 +1,4 @@
+interface:
+  display_name: "Raspberry Pi L298N"
+  short_description: "Wire and drive an L298N from a Pi"
+  default_prompt: "Use $raspberry-pi-l298n to help wire a Raspberry Pi to an L298N motor driver and write the control code."
