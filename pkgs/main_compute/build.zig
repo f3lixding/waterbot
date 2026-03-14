@@ -64,5 +64,7 @@ pub fn build(b: *std.Build) void {
 fn addSharedDeps(c: *std.Build.Step.Compile, deps: []const SharedDeps) void {
     for (deps) |d| {
         c.root_module.addImport(d.import_name, d.dep.module(d.module_name));
+        c.linkLibC();
+        c.linkSystemLibrary("gpiod");
     }
 }

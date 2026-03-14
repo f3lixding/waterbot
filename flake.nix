@@ -34,8 +34,10 @@
         mkZigPkg =
           { name, src }:
           let
-            stdenvFor =
-              if system == "x86_64-linux" then pkgs.pkgsCross.aarch64-multiplatform.stdenv else pkgs.stdenv;
+            targetPkgs =
+              if system == "x86_64-linux" then pkgs.pkgsCross.aarch64-multiplatform else pkgs;
+
+            stdenvFor = targetPkgs.stdenv;
 
             zigDepsFile = pkgsDir + "/${name}/build.zig.zon.nix";
             zigDeps =
@@ -60,6 +62,7 @@
             version = "0.0.0";
 
             inherit src nativeBuildInputs;
+            buildInputs = [ targetPkgs.libgpiod ];
 
             preBuild = ''
               export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
@@ -131,6 +134,7 @@
 
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs;
+          buildInputs = [ pkgs.libgpiod ];
           shellHook = ''
             exec ${pkgs.zsh}/bin/zsh
           '';
