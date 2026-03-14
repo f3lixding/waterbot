@@ -3,38 +3,186 @@ const httpz = @import("httpz");
 
 const Allocator = std.mem.Allocator;
 const PORT: u16 = 8888;
+const websocket = httpz.websocket;
+
+const Handler = struct {
+    socket_path: []const u8,
+
+    pub const WebsocketHandler = Client;
+};
+
+const Client = struct {
+    conn: *websocket.Conn,
+    backend_stream: std.net.Stream,
+
+    const Context = struct {
+        socket_path: []const u8,
+    };
+
+    pub fn init(conn: *websocket.Conn, ctx: *const Context) !Client {
+        const backend_stream = try connectBackend(ctx.socket_path);
+        return .{
+            .conn = conn,
+            .backend_stream = backend_stream,
+        };
+    }
+
+    pub fn afterInit(self: *Client) !void {
+        try self.conn.write("connected");
+    }
+
+    pub fn clientMessage(self: *Client, data: []const u8) !void {
+        if (!std.mem.eql(u8, data, "left") and !std.mem.eql(u8, data, "right")) {
+            try self.conn.write("expected 'left' or 'right'");
+            return;
+        }
+
+        try self.backend_stream.writeAll(data);
+        try self.backend_stream.writeAll("\n");
+        try self.conn.write(data);
+    }
+
+    pub fn close(self: *Client) void {
+        self.backend_stream.close();
+    }
+};
 
 pub fn run(allocator: Allocator, socket_path: []const u8) !void {
-    _ = socket_path;
+    var handler = Handler{ .socket_path = socket_path };
 
-    var server = try httpz.Server(void).init(allocator, .{
+    var server = try httpz.Server(*Handler).init(allocator, .{
         .address = .all(PORT),
-    }, {});
+    }, &handler);
     defer server.deinit();
     defer server.stop();
 
     var router = try server.router(.{});
     router.get("/home", serveHome, .{});
+    router.get("/ws", serveWebsocket, .{});
 
     std.debug.print("listening http://0.0.0.0:{d}/\n", .{PORT});
     try server.listen();
 }
 
-fn serveHome(_: *httpz.Request, res: *httpz.Response) !void {
+fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
     res.status = 200;
+    res.content_type = .HTML;
     res.body =
         \\<!DOCTYPE html>
         \\<html>
         \\  <head>
         \\    <meta charset="utf-8" />
         \\    <title>Waterbot</title>
+        \\    <style>
+        \\      :root {
+        \\        font-family: sans-serif;
+        \\      }
+        \\      body {
+        \\        margin: 0;
+        \\        min-height: 100vh;
+        \\        display: grid;
+        \\        place-items: center;
+        \\        background: linear-gradient(135deg, #d8f0ff, #f7fbff);
+        \\      }
+        \\      main {
+        \\        padding: 2rem;
+        \\        border: 1px solid #9bc7e5;
+        \\        border-radius: 1rem;
+        \\        background: rgba(255, 255, 255, 0.9);
+        \\        box-shadow: 0 1rem 2rem rgba(49, 94, 130, 0.15);
+        \\      }
+        \\      .controls {
+        \\        display: flex;
+        \\        gap: 1rem;
+        \\        margin-top: 1rem;
+        \\      }
+        \\      button {
+        \\        min-width: 8rem;
+        \\        padding: 0.9rem 1.2rem;
+        \\        border: 0;
+        \\        border-radius: 999px;
+        \\        font-size: 1rem;
+        \\        font-weight: 700;
+        \\        background: #0f6cbd;
+        \\        color: white;
+        \\        cursor: pointer;
+        \\      }
+        \\      button:disabled {
+        \\        background: #8ca8bf;
+        \\        cursor: wait;
+        \\      }
+        \\      #status {
+        \\        margin-top: 1rem;
+        \\      }
+        \\    </style>
         \\  </head>
         \\  <body>
-        \\    <h1>Waterbot</h1>
-        \\    <p>Home page placeholder.</p>
+        \\    <main>
+        \\      <h1>Waterbot</h1>
+        \\      <p>Use one websocket connection and send commands with the buttons below.</p>
+        \\      <div class="controls">
+        \\        <button id="left" disabled>left</button>
+        \\        <button id="right" disabled>right</button>
+        \\      </div>
+        \\      <p id="status">Connecting...</p>
+        \\    </main>
+        \\    <script>
+        \\      const status = document.getElementById("status");
+        \\      const left = document.getElementById("left");
+        \\      const right = document.getElementById("right");
+        \\      const buttons = [left, right];
+        \\
+        \\      const setConnected = (connected) => {
+        \\        for (const button of buttons) button.disabled = !connected;
+        \\      };
+        \\
+        \\      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+        \\      const ws = new WebSocket(`${scheme}://${window.location.host}/ws`);
+        \\
+        \\      ws.addEventListener("open", () => {
+        \\        setConnected(true);
+        \\        status.textContent = "Connected";
+        \\      });
+        \\
+        \\      ws.addEventListener("message", (event) => {
+        \\        status.textContent = `Last message: ${event.data}`;
+        \\      });
+        \\
+        \\      ws.addEventListener("close", () => {
+        \\        setConnected(false);
+        \\        status.textContent = "Disconnected";
+        \\      });
+        \\
+        \\      ws.addEventListener("error", () => {
+        \\        setConnected(false);
+        \\        status.textContent = "Websocket error";
+        \\      });
+        \\
+        \\      left.addEventListener("click", () => ws.send("left"));
+        \\      right.addEventListener("click", () => ws.send("right"));
+        \\    </script>
         \\  </body>
         \\</html>
     ;
+}
+
+fn serveWebsocket(handler: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
+    const ctx = Client.Context{ .socket_path = handler.socket_path };
+
+    if (try httpz.upgradeWebsocket(Client, req, res, &ctx) == false) {
+        res.status = 400;
+        res.body = "invalid websocket";
+    }
+}
+
+fn connectBackend(socket_path: []const u8) !std.net.Stream {
+    const fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
+    errdefer std.posix.close(fd);
+
+    const addr = try std.net.Address.initUnix(socket_path);
+    try std.posix.connect(fd, &addr.any, addr.getOsSockLen());
+
+    return .{ .handle = fd };
 }
 
 pub fn main() void {
