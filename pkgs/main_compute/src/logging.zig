@@ -1,0 +1,46 @@
+//! For now we will use lock to deal with this being called from multiple
+//! threads.
+//! Later on we will use an actor pattern to spawn a dedicated thread and use
+//! dispatch pattern.
+//!
+//! TODOs:
+//!
+//! - adopt a dispatch pattern
+//! - auto rotate
+//! - auto clean up
+
+const std = @import("std");
+
+const LOG_LOCATION: []const u8 = "/tmp/waterbot.log";
+
+var log_mutex: std.Thread.Mutex = .{};
+var log_file: ?std.fs.File = null;
+
+pub fn init() !void {
+    if (log_file != null) return;
+
+    log_file = std.fs.createFileAbsolute(LOG_LOCATION, .{
+        .read = true,
+        .truncate = false,
+    });
+    try log_file.?.seekFromEnd(0);
+}
+
+pub fn deinit() void {
+    if (log_file) |file| {
+        file.close();
+        log_file = null;
+    }
+}
+
+fn logFn(
+    comptime level: std.log.Level,
+    comptime scope: @Type(.enum_literal),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    log_mutex.lock();
+    defer log_mutex.unlock();
+
+    const file = log_file orelse return;
+}
