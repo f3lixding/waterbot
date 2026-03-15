@@ -19,7 +19,7 @@ var log_file: ?std.fs.File = null;
 pub fn init() !void {
     if (log_file != null) return;
 
-    log_file = std.fs.createFileAbsolute(LOG_LOCATION, .{
+    log_file = try std.fs.createFileAbsolute(LOG_LOCATION, .{
         .read = true,
         .truncate = false,
     });
@@ -33,7 +33,7 @@ pub fn deinit() void {
     }
 }
 
-fn logFn(
+pub fn logFn(
     comptime level: std.log.Level,
     comptime scope: @Type(.enum_literal),
     comptime format: []const u8,

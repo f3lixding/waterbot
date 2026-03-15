@@ -6,8 +6,14 @@ const Streamer = @import("Streamer.zig");
 const Spsc = @import("channel.zig").Spsc(usize);
 const Tx = Spsc.Tx;
 const Rx = Spsc.Rx;
+const logging = @import("logging.zig");
 
 const SOCKET_PATH: []const u8 = "/tmp/main_compute.sock";
+
+const std_options: std.Options = .{
+    .log_level = .debug,
+    .logFn = logging.logFn,
+};
 
 fn preStart() !Streamer {
     if (std.fs.accessAbsolute(SOCKET_PATH, .{})) |_| {
@@ -62,6 +68,9 @@ pub fn main() !void {
     // TODO: learn about different allocator types and choose a better (if
     // there is) to use
     const allocator = std.heap.page_allocator;
+
+    try logging.init();
+    defer logging.deinit();
 
     const server_thread = try std.Thread.spawn(.{}, spawnServer, .{ allocator, SOCKET_PATH });
     defer server_thread.join();
