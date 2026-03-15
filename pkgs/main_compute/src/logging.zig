@@ -12,6 +12,8 @@
 const std = @import("std");
 
 const LOG_LOCATION: []const u8 = "/tmp/waterbot.log";
+// 50 MB
+const SIZE_UPPERBOUND: u64 = 52_428_000;
 
 var log_mutex: std.Thread.Mutex = .{};
 var log_file: ?std.fs.File = null;
@@ -23,6 +25,17 @@ pub fn init() !void {
         .read = true,
         .truncate = false,
     });
+
+    // we don't have auto rotate right now so we'll settle for lazy checking
+    const stat = try log_file.?.stat();
+    if (stat.size > SIZE_UPPERBOUND) {
+        log_file.?.close();
+        try std.fs.deleteDirAbsolute(LOG_LOCATION);
+        log_file = try std.fs.createFileAbsolute(LOG_LOCATION, .{
+            .read = true,
+            .truncate = false,
+        });
+    }
     try log_file.?.seekFromEnd(0);
 }
 
