@@ -10,7 +10,7 @@ const logging = @import("logging.zig");
 
 const SOCKET_PATH: []const u8 = "/tmp/main_compute.sock";
 
-const std_options: std.Options = .{
+pub const std_options: std.Options = .{
     .log_level = .debug,
     .logFn = logging.logFn,
 };
@@ -46,8 +46,10 @@ fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
 }
 
 fn mainLoop(rx: Rx) !void {
+    const log = std.log.scoped(.main_loop);
     while (true) {
         const received = rx.recv() catch unreachable;
+        log.info("received through spsc: {d}\n", .{received});
         std.debug.print("recevied through spsc: {d}\n", .{received});
     }
 }

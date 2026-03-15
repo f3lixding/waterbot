@@ -57,15 +57,15 @@ pub fn logFn(
 
     const file = log_file orelse return;
 
-    const buf: [1024]u8 = undefined;
-    var file_writer = file.writer(&buf);
+    var buf: [1024]u8 = undefined;
+    var file_writer = file.writerStreaming(&buf);
     const writer = &file_writer.interface;
 
     writer.print("[{s}] [{s}] ", .{
         @tagName(level),
         @tagName(scope),
-    });
+    }) catch return;
     writer.print(format, args) catch return;
     writer.writeByte('\n') catch return;
-    writer.flush();
+    writer.flush() catch return;
 }
