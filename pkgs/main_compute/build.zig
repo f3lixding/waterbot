@@ -9,6 +9,7 @@ const SharedDeps = struct {
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const gpiod_prefix = b.option([]const u8, "gpiod-prefix", "Prefix path for libgpiod headers and libraries");
 
     const httpz = b.dependency("httpz", .{
         .target = target,
@@ -29,6 +30,7 @@ pub fn build(b: *std.Build) void {
     });
 
     addSharedDeps(main_bin, shared);
+    linkGpiod(b, main_bin, gpiod_prefix);
 
     b.installArtifact(main_bin);
 
@@ -43,6 +45,7 @@ pub fn build(b: *std.Build) void {
     });
 
     addSharedDeps(test_bin, shared);
+    linkGpiod(b, test_bin, gpiod_prefix);
 
     b.installArtifact(test_bin);
 
@@ -55,6 +58,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     addSharedDeps(test_entry, shared);
+    linkGpiod(b, test_entry, gpiod_prefix);
 
     const test_run = b.addRunArtifact(test_entry);
     const test_step = b.step("test", "runs tests");
@@ -64,7 +68,26 @@ pub fn build(b: *std.Build) void {
 fn addSharedDeps(c: *std.Build.Step.Compile, deps: []const SharedDeps) void {
     for (deps) |d| {
         c.root_module.addImport(d.import_name, d.dep.module(d.module_name));
-        c.linkLibC();
-        c.linkSystemLibrary("gpiod");
     }
+}
+
+/// A special function is needed for this. We needed to namespace the header
+/// files as well as actual lib file in accordance to their target platform.
+/// Otherwise we would run into linking problem and unresolved glibc symbols
+/// (which would fail the compilation as well)
+/// The option of prefix is passed in from flake.nix
+fn linkGpiod(
+    b: *std.Build,
+    c: *std.Build.Step.Compile,
+    gpiod_prefix: ?[]const u8,
+) void {
+    c.linkLibC();
+
+    if (gpiod_prefix) |prefix| {
+        c.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix, "include" }) });
+        c.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ prefix, "lib" }) });
+    }
+
+    c.linker_allow_shlib_undefined = true;
+    c.linkSystemLibrary("gpiod");
 }

@@ -78,7 +78,11 @@
 
             buildPhase = ''
               runHook preBuild
-              zig build -Dtarget=${zigTarget} -Doptimize=ReleaseSafe -p "$out"
+              zig build \
+                -Dtarget=${zigTarget} \
+                -Doptimize=ReleaseSafe \
+                -Dgpiod-prefix=${targetPkgs.libgpiod} \
+                -p "$out"
             '';
 
             installPhase = "true";
