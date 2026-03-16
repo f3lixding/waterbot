@@ -1,5 +1,9 @@
 # WATERBOT
 
+Related reading:
+
+- [GPIO concepts](./gpio.md)
+
 ## Abstract
 
 This document serves as a high level design doc for the project. 
