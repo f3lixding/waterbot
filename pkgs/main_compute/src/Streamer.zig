@@ -33,29 +33,19 @@ pub fn listenAndExecute(
     on_message: fn (std.mem.Allocator, ?*anyopaque, []const u8) anyerror!void,
 ) !void {
     const conn_fd = try std.posix.accept(self.fd, null, null, 0);
-    const stream = std.net.Stream{ .handle = conn_fd };
-    defer stream.close();
+    const file = std.fs.File{ .handle = conn_fd };
+    defer file.close();
 
-    var used: usize = 0;
+    var file_reader = file.readerStreaming(line_buf);
+    const reader = &file_reader.interface;
     while (true) {
-        if (used >= line_buf.len) return error.LineTooLong;
-        const n = try stream.read(line_buf[used..]);
-        if (n == 0) break;
-        used += n;
+        const msg = reader.takeDelimiter('\n') catch |err| switch (err) {
+            error.StreamTooLong => return error.LineTooLong,
+            else => return err,
+        } orelse break;
 
-        var start: usize = 0;
-        while (true) {
-            const rel = std.mem.indexOfScalar(u8, line_buf[start..used], '\n') orelse break;
-            const end = start + rel;
-            on_message(self.allocator, ctx, line_buf[start..end]) catch |e| {
-                log.err("Error deserializing incoming message: {any}\n", .{e});
-            };
-            start = end + 1;
-        }
-
-        if (start == 0) continue;
-        const remaining = used - start;
-        std.mem.copyForwards(u8, line_buf[0..remaining], line_buf[start..used]);
-        used = remaining;
+        on_message(self.allocator, ctx, msg) catch |e| {
+            log.err("Error deserializing incoming message: {any}\n", .{e});
+        };
     }
 }
