@@ -1,5 +1,6 @@
 const std = @import("std");
 const httpz = @import("httpz");
+const protocol = @import("protocol.zig");
 
 const Allocator = std.mem.Allocator;
 const PORT: u16 = 8888;
@@ -33,10 +34,10 @@ const Client = struct {
 
     // This is a method expected by httpz
     pub fn clientMessage(self: *Client, data: []const u8) !void {
-        if (!std.mem.eql(u8, data, "left") and !std.mem.eql(u8, data, "right")) {
-            try self.conn.write("expected 'left' or 'right'");
+        _ = protocol.Command.fromBytes(std.heap.page_allocator, data) catch {
+            try self.conn.write("expected a valid Command JSON payload");
             return;
-        }
+        };
 
         try self.backend_stream.writeAll(data);
         try self.backend_stream.writeAll("\n");
@@ -137,6 +138,12 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\        for (const button of buttons) button.disabled = !connected;
         \\      };
         \\
+        \\      const buildCommand = (direction) => JSON.stringify({
+        \\        direction: {
+        \\          [direction]: { speed: 10 },
+        \\        },
+        \\      });
+        \\
         \\      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
         \\      const ws = new WebSocket(`${scheme}://${window.location.host}/ws`);
         \\
@@ -159,8 +166,8 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\        status.textContent = "Websocket error";
         \\      });
         \\
-        \\      left.addEventListener("click", () => ws.send("left"));
-        \\      right.addEventListener("click", () => ws.send("right"));
+        \\      left.addEventListener("click", () => ws.send(buildCommand("left")));
+        \\      right.addEventListener("click", () => ws.send(buildCommand("right")));
         \\    </script>
         \\  </body>
         \\</html>

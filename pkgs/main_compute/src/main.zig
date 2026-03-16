@@ -3,7 +3,8 @@ const Allocator = std.mem.Allocator;
 
 const main_compute = @import("main_compute");
 const Streamer = @import("Streamer.zig");
-const Spsc = @import("channel.zig").Spsc(usize);
+const protocol = @import("protocol.zig");
+const Spsc = @import("channel.zig").Spsc(protocol.Command);
 const Tx = Spsc.Tx;
 const Rx = Spsc.Rx;
 const logging = @import("logging.zig");
@@ -15,12 +16,12 @@ pub const std_options: std.Options = .{
     .logFn = logging.logFn,
 };
 
-fn preStart() !Streamer {
+fn preStart(allocator: Allocator) !Streamer {
     if (std.fs.accessAbsolute(SOCKET_PATH, .{})) |_| {
         try std.fs.deleteFileAbsolute(SOCKET_PATH);
     } else |_| {}
 
-    return try Streamer.init(SOCKET_PATH);
+    return try Streamer.init(allocator, SOCKET_PATH);
 }
 
 fn spawnServer(
@@ -33,10 +34,10 @@ fn spawnServer(
 
 fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
     const onMessage = struct {
-        pub fn onMessage(ctx: ?*anyopaque, msg: []const u8) anyerror!void {
+        pub fn onMessage(alloc: Allocator, ctx: ?*anyopaque, msg: []const u8) anyerror!void {
             const tx_ptr: *const Tx = @ptrCast(@alignCast(ctx.?));
-            std.debug.print("recv: {s}\n", .{msg});
-            try tx_ptr.send(10);
+            const command = try protocol.Command.fromBytes(alloc, msg);
+            try tx_ptr.send(command);
         }
     }.onMessage;
 
@@ -49,8 +50,7 @@ fn mainLoop(rx: Rx) !void {
     const log = std.log.scoped(.main_loop);
     while (true) {
         const received = rx.recv() catch unreachable;
-        log.info("received through spsc: {d}\n", .{received});
-        std.debug.print("recevied through spsc: {d}\n", .{received});
+        log.info("received through spsc: {any}\n", .{received});
     }
 }
 
@@ -64,12 +64,12 @@ fn mainLoop(rx: Rx) !void {
 /// - Initiate the main loop routine (this is the brain that actually affects the
 /// GPIOs)
 pub fn main() !void {
-    var streamer = try preStart();
-    defer streamer.deinit();
-
     // TODO: learn about different allocator types and choose a better (if
     // there is) to use
     const allocator = std.heap.page_allocator;
+
+    var streamer = try preStart(allocator);
+    defer streamer.deinit();
 
     try logging.init();
     defer logging.deinit();
