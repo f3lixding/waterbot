@@ -97,6 +97,7 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\        display: flex;
         \\        gap: 1rem;
         \\        margin-top: 1rem;
+        \\        justify-content: center;
         \\      }
         \\      button {
         \\        min-width: 8rem;
@@ -124,6 +125,7 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\      <p>Use one websocket connection and send commands with the buttons below.</p>
         \\      <div class="controls">
         \\        <button id="left" disabled>left</button>
+        \\        <button id="stop" disabled>stop</button>
         \\        <button id="right" disabled>right</button>
         \\      </div>
         \\      <p id="status">Connecting...</p>
@@ -132,16 +134,17 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\      const status = document.getElementById("status");
         \\      const left = document.getElementById("left");
         \\      const right = document.getElementById("right");
-        \\      const buttons = [left, right];
+        \\      const stop = document.getElementById("stop");
+        \\      const buttons = [left, stop, right];
         \\
         \\      const setConnected = (connected) => {
         \\        for (const button of buttons) button.disabled = !connected;
         \\      };
         \\
         \\      const buildCommand = (direction) => JSON.stringify({
-        \\        direction: {
-        \\          [direction]: { speed: 10 },
-        \\        },
+        \\        direction: direction === "stop"
+        \\          ? { stop: {} }
+        \\          : { [direction]: { speed: 10 } },
         \\      });
         \\
         \\      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
@@ -167,6 +170,7 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\      });
         \\
         \\      left.addEventListener("click", () => ws.send(buildCommand("left")));
+        \\      stop.addEventListener("click", () => ws.send(buildCommand("stop")));
         \\      right.addEventListener("click", () => ws.send(buildCommand("right")));
         \\    </script>
         \\  </body>

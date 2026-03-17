@@ -25,6 +25,7 @@ pub const Command = union(enum) {
 pub const Direction = union(enum) {
     left: Payload,
     right: Payload,
+    stop,
 
     pub const Payload = struct {
         speed: u8,
@@ -77,7 +78,7 @@ test "envelope deserializes from json bytes" {
         .direction => |dir| {
             switch (dir) {
                 .left => |payload| try std.testing.expectEqual(42, payload.speed),
-                .right => return error.UnexpectedDirection,
+                else => return error.UnexpectedDirection,
             }
         },
     }
@@ -100,6 +101,27 @@ test "direction deserializes from json bytes" {
 
     switch (direction) {
         .right => |payload| try std.testing.expectEqual(7, payload.speed),
-        .left => return error.UnexpectedDirection,
+        else => return error.UnexpectedDirection,
+    }
+}
+
+test "stop command serializes to json bytes" {
+    const allocator = std.testing.allocator;
+
+    const command = Command{ .direction = .stop };
+    const bytes = try command.toOwnedBytes(allocator);
+    defer allocator.free(bytes);
+
+    try std.testing.expectEqualStrings("{\"direction\":{\"stop\":{}}}", bytes);
+}
+
+test "stop direction deserializes from json bytes" {
+    const allocator = std.testing.allocator;
+
+    const direction = try Direction.fromBytes(allocator, "{\"stop\":{}}");
+
+    switch (direction) {
+        .stop => {},
+        else => return error.UnexpectedDirection,
     }
 }

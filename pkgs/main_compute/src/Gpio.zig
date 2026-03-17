@@ -7,6 +7,7 @@
 //!   rest of the code
 
 const std = @import("std");
+const log = std.log.scoped(.gpio);
 
 pub const Gpio = @cImport({
     @cInclude("gpiod.h");
@@ -187,6 +188,10 @@ pub const Bridge = struct {
     /// - read shared state
     /// - derive the phase, if we're in pwm phase, we need to set value of on
     ///   for a percentage of the duty cycle to achieve the desired speed
+    ///
+    /// There are some pins that are some PWM pins on the raspberry pi.
+    /// If we do end up using those pins, this is probably not needed.
+    /// TODO: conditionally exclude this thread when PWM pins are used.
     fn pwmWorker(request: *Gpio.gpiod_line_request, state: *State) void {
         var last_values = inactiveTriplet();
 
@@ -241,7 +246,11 @@ const Phase = union(enum) {
     },
 };
 
-fn activeTriplet(enable: Gpio.enum_gpiod_line_value, in1: Gpio.enum_gpiod_line_value, in2: Gpio.enum_gpiod_line_value) [3]Gpio.enum_gpiod_line_value {
+fn activeTriplet(
+    enable: Gpio.enum_gpiod_line_value,
+    in1: Gpio.enum_gpiod_line_value,
+    in2: Gpio.enum_gpiod_line_value,
+) [3]Gpio.enum_gpiod_line_value {
     return .{
         enable,
         in1,

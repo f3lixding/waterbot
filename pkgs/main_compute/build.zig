@@ -89,5 +89,5 @@ fn linkGpiod(
     }
 
     c.linker_allow_shlib_undefined = true;
-    c.linkSystemLibrary("gpiod");
+    c.root_module.linkSystemLibrary("gpiod", .{ .preferred_link_mode = .static });
 }

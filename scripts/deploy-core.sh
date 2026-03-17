@@ -20,6 +20,26 @@ Examples:
 EOF
 }
 
+verify_no_gpiod_runtime_dep() {
+  local bin_path="$1"
+  local bundle_dir="$2"
+
+  if ! command -v readelf >/dev/null 2>&1; then
+    echo "warning: readelf not found; skipping runtime dependency verification for ${bin_path}" >&2
+    return 0
+  fi
+
+  if readelf -d "${bin_path}" 2>/dev/null | grep -Fq 'libgpiod.so'; then
+    if [[ -d "${bundle_dir}" ]] && find "${bundle_dir}" -maxdepth 1 -name 'libgpiod.so*' | grep -q .; then
+      return 0
+    fi
+
+    echo "Refusing to continue: ${bin_path} still has a runtime dependency on libgpiod.so but no bundled lib/ was found" >&2
+    readelf -d "${bin_path}" >&2
+    exit 1
+  fi
+}
+
 if [[ $# -lt 1 ]]; then
   print_usage
   exit 2
@@ -86,6 +106,18 @@ fi
 
 nix build ".#${flake_attr}"
 
+if [[ -d "./result/bin" ]]; then
+  shopt -s nullglob
+  built_bins=(./result/bin/*)
+  shopt -u nullglob
+
+  for bin_path in "${built_bins[@]}"; do
+    if [[ -f "${bin_path}" && -x "${bin_path}" ]]; then
+      verify_no_gpiod_runtime_dep "${bin_path}" "./result/lib"
+    fi
+  done
+fi
+
 if [[ "$command" == "deploy" ]]; then
   if [[ ! -d "./result/bin" ]]; then
     echo "Expected ./result/bin to exist after build" >&2
@@ -102,14 +134,25 @@ if [[ "$command" == "deploy" ]]; then
   fi
 
   staged_target_dir="${target_dir}.next"
+  stage_libs=0
+
+  if [[ -d "./result/lib" ]]; then
+    stage_libs=1
+  fi
 
   # stage the new build in a fresh directory, then swap it into place remotely
   ssh "${target_user}@${target_host}" \
-    "bash -lc 'rm -rf ${staged_target_dir}; mkdir -p ${staged_target_dir}'"
-  scp "${bin_files[@]}" "${target_user}@${target_host}:${staged_target_dir}/"
+    "bash -lc 'rm -rf ${staged_target_dir}; mkdir -p ${staged_target_dir}/bin'"
+  scp "${bin_files[@]}" "${target_user}@${target_host}:${staged_target_dir}/bin/"
+
+  if [[ ${stage_libs} -eq 1 ]]; then
+    ssh "${target_user}@${target_host}" \
+      "bash -lc 'mkdir -p ${staged_target_dir}/lib'"
+    scp ./result/lib/* "${target_user}@${target_host}:${staged_target_dir}/lib/"
+  fi
 
   # restart the process
   ssh "${target_user}@${target_host}" "pkill -9 main_compute >/dev/null 2>&1 || true"
   ssh "${target_user}@${target_host}" \
-    "bash -lc 'rm -rf ${target_dir_bak}; if [[ -e ${target_dir} ]]; then mv ${target_dir} ${target_dir_bak}; fi; mv ${staged_target_dir} ${target_dir}; nohup ${target_dir}/main_compute >/dev/null 2>&1 &'"
+    "bash -lc 'rm -rf ${target_dir_bak}; if [[ -e ${target_dir} ]]; then mv ${target_dir} ${target_dir_bak}; fi; mv ${staged_target_dir} ${target_dir}; nohup ${target_dir}/bin/main_compute >/dev/null 2>&1 &'"
 fi

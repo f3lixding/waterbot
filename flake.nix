@@ -26,6 +26,7 @@
         nativeBuildInputs = [
           zig
           pkgs.zls_0_15
+          pkgs.patchelf
         ];
 
         # Because we are building this for raspberry pi 5
@@ -34,8 +35,7 @@
         mkZigPkg =
           { name, src }:
           let
-            targetPkgs =
-              if system == "x86_64-linux" then pkgs.pkgsCross.aarch64-multiplatform else pkgs;
+            targetPkgs = if system == "x86_64-linux" then pkgs.pkgsCross.aarch64-multiplatform else pkgs;
 
             stdenvFor = targetPkgs.stdenv;
 
@@ -83,6 +83,23 @@
                 -Doptimize=ReleaseSafe \
                 -Dgpiod-prefix=${targetPkgs.libgpiod} \
                 -p "$out"
+            '';
+
+            postFixup = ''
+              mkdir -p "$out/lib"
+              cp -a ${targetPkgs.libgpiod}/lib/libgpiod.so* "$out/lib/"
+
+              if [[ -d "$out/bin" ]]; then
+                for bin_path in "$out"/bin/*; do
+                  if [[ -f "$bin_path" && -x "$bin_path" ]]; then
+                    # patchelf is a bin that alters the RPATH of a bin
+                    # we do this because libgpiod is to be dynamically linked
+                    # $ORIGIN is a sepcial token understood by the ELF dynamic loader
+                    # It means 'relative to cwd of the bin'
+                    patchelf --set-rpath '$ORIGIN/../lib' "$bin_path"
+                  fi
+                done
+              fi
             '';
 
             installPhase = "true";
