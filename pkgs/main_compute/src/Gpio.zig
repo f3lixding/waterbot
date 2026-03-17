@@ -39,7 +39,17 @@ pub const Chip = struct {
 };
 
 pub const Bridge = struct {
+    const pwm_period_ns = 20 * std.time.ns_per_ms;
+    const State = struct {
+        mutex: std.Thread.Mutex = .{},
+        direction: Direction = .coast,
+        speed_percent: u8 = 0,
+        running: bool = true,
+    };
+
     request: *Gpio.gpiod_line_request,
+    state: *State,
+    worker: std.Thread,
 
     /// Initializes control of one H-bridge channel through three GPIO pins:
     /// `enable`, `in1`, and `in2`.
@@ -102,30 +112,138 @@ pub const Bridge = struct {
             line_config,
         ) orelse return error.RequestLinesFailed;
 
-        return .{ .request = request };
+        const state = try std.heap.page_allocator.create(State);
+        errdefer std.heap.page_allocator.destroy(state);
+        state.* = .{};
+
+        const worker = try std.Thread.spawn(.{}, pwmWorker, .{ request, state });
+
+        return .{
+            .request = request,
+            .state = state,
+            .worker = worker,
+        };
     }
 
-    pub fn deinit(self: Bridge) void {
+    pub fn deinit(self: *Bridge) void {
+        self.state.mutex.lock();
+        self.state.running = false;
+        self.state.mutex.unlock();
+
+        self.worker.join();
+        _ = setValues(self.request, inactiveTriplet()) catch {};
         Gpio.gpiod_line_request_release(self.request);
+        std.heap.page_allocator.destroy(self.state);
     }
 
-    pub fn set(self: Bridge, direction: Direction) !void {
-        var values = switch (direction) {
-            .forward => activeTriplet(Gpio.GPIOD_LINE_VALUE_ACTIVE, Gpio.GPIOD_LINE_VALUE_INACTIVE),
-            .backward => activeTriplet(Gpio.GPIOD_LINE_VALUE_INACTIVE, Gpio.GPIOD_LINE_VALUE_ACTIVE),
-            .coast => inactiveTriplet(),
-            .brake => activeTriplet(Gpio.GPIOD_LINE_VALUE_ACTIVE, Gpio.GPIOD_LINE_VALUE_ACTIVE),
+    /// Sets the bridge state directly.
+    ///
+    /// `forward` and `backward` run at 100% duty cycle. Use `drive` or
+    /// `setSpeed` for variable speed.
+    pub fn set(self: *Bridge, direction: Direction) !void {
+        const speed_percent: u8 = switch (direction) {
+            .forward, .backward => 100,
+            .coast, .brake => 0,
         };
 
-        if (Gpio.gpiod_line_request_set_values(self.request, &values) != 0) {
-            return error.SetValuesFailed;
+        try self.updateState(direction, speed_percent);
+    }
+
+    /// Runs the bridge in `direction` using software PWM on the `enable` pin.
+    ///
+    /// `speed_percent` is a duty cycle from `0` to `100`.
+    pub fn drive(self: *Bridge, direction: Direction, speed_percent: u8) !void {
+        if (speed_percent > 100) return error.InvalidSpeed;
+        try self.updateState(direction, speed_percent);
+    }
+
+    /// Updates speed while preserving the current direction.
+    ///
+    /// This is only meaningful when the current direction is `forward` or
+    /// `backward`.
+    pub fn setSpeed(self: *Bridge, speed_percent: u8) !void {
+        if (speed_percent > 100) return error.InvalidSpeed;
+
+        self.state.mutex.lock();
+        const direction = self.state.direction;
+        self.state.mutex.unlock();
+
+        switch (direction) {
+            .forward, .backward => try self.updateState(direction, speed_percent),
+            .coast, .brake => return error.SpeedRequiresDriveDirection,
+        }
+    }
+
+    fn updateState(self: *Bridge, direction: Direction, speed_percent: u8) !void {
+        self.state.mutex.lock();
+        defer self.state.mutex.unlock();
+
+        self.state.direction = direction;
+        self.state.speed_percent = speed_percent;
+    }
+
+    /// This is a software PWM. This is to be ran in the background in a hot loop.
+    /// In the absence of a hardware PWM, this is typically how PWM is done:
+    /// - read shared state
+    /// - derive the phase, if we're in pwm phase, we need to set value of on
+    ///   for a percentage of the duty cycle to achieve the desired speed
+    fn pwmWorker(request: *Gpio.gpiod_line_request, state: *State) void {
+        var last_values = inactiveTriplet();
+
+        while (true) {
+            state.mutex.lock();
+            const running = state.running;
+            const direction = state.direction;
+            const speed_percent = state.speed_percent;
+            state.mutex.unlock();
+
+            if (!running) break;
+
+            const phase = phaseFor(direction, speed_percent);
+            switch (phase) {
+                .steady => |values| {
+                    if (!tripletsEqual(last_values, values)) {
+                        setValues(request, values) catch {};
+                        last_values = values;
+                    }
+                    std.Thread.sleep(pwm_period_ns);
+                },
+                .pwm => |pwm| {
+                    if (!tripletsEqual(last_values, pwm.active)) {
+                        setValues(request, pwm.active) catch {};
+                        last_values = pwm.active;
+                    }
+                    std.Thread.sleep(pwm.high_ns);
+
+                    state.mutex.lock();
+                    const still_running = state.running;
+                    state.mutex.unlock();
+                    if (!still_running) break;
+
+                    if (!tripletsEqual(last_values, pwm.inactive)) {
+                        setValues(request, pwm.inactive) catch {};
+                        last_values = pwm.inactive;
+                    }
+                    std.Thread.sleep(pwm.low_ns);
+                },
+            }
         }
     }
 };
 
-fn activeTriplet(in1: Gpio.enum_gpiod_line_value, in2: Gpio.enum_gpiod_line_value) [3]Gpio.enum_gpiod_line_value {
+const Phase = union(enum) {
+    steady: [3]Gpio.enum_gpiod_line_value,
+    pwm: struct {
+        active: [3]Gpio.enum_gpiod_line_value,
+        inactive: [3]Gpio.enum_gpiod_line_value,
+        high_ns: u64,
+        low_ns: u64,
+    },
+};
+
+fn activeTriplet(enable: Gpio.enum_gpiod_line_value, in1: Gpio.enum_gpiod_line_value, in2: Gpio.enum_gpiod_line_value) [3]Gpio.enum_gpiod_line_value {
     return .{
-        Gpio.GPIOD_LINE_VALUE_ACTIVE,
+        enable,
         in1,
         in2,
     };
@@ -139,8 +257,67 @@ fn inactiveTriplet() [3]Gpio.enum_gpiod_line_value {
     };
 }
 
+fn forwardTriplet(enable: Gpio.enum_gpiod_line_value) [3]Gpio.enum_gpiod_line_value {
+    return activeTriplet(enable, Gpio.GPIOD_LINE_VALUE_ACTIVE, Gpio.GPIOD_LINE_VALUE_INACTIVE);
+}
+
+fn backwardTriplet(enable: Gpio.enum_gpiod_line_value) [3]Gpio.enum_gpiod_line_value {
+    return activeTriplet(enable, Gpio.GPIOD_LINE_VALUE_INACTIVE, Gpio.GPIOD_LINE_VALUE_ACTIVE);
+}
+
+fn brakeTriplet() [3]Gpio.enum_gpiod_line_value {
+    return activeTriplet(
+        Gpio.GPIOD_LINE_VALUE_ACTIVE,
+        Gpio.GPIOD_LINE_VALUE_ACTIVE,
+        Gpio.GPIOD_LINE_VALUE_ACTIVE,
+    );
+}
+
+fn phaseFor(direction: Direction, speed_percent: u8) Phase {
+    return switch (direction) {
+        .coast => .{ .steady = inactiveTriplet() },
+        .brake => .{ .steady = brakeTriplet() },
+        .forward => directionalPhase(forwardTriplet, speed_percent),
+        .backward => directionalPhase(backwardTriplet, speed_percent),
+    };
+}
+
+fn directionalPhase(
+    comptime tripletFn: fn (Gpio.enum_gpiod_line_value) [3]Gpio.enum_gpiod_line_value,
+    speed_percent: u8,
+) Phase {
+    if (speed_percent == 0) return .{ .steady = inactiveTriplet() };
+    if (speed_percent >= 100) return .{ .steady = tripletFn(Gpio.GPIOD_LINE_VALUE_ACTIVE) };
+
+    const high_ns = (@as(u64, Bridge.pwm_period_ns) * speed_percent) / 100;
+    const low_ns = @as(u64, Bridge.pwm_period_ns) - high_ns;
+
+    return .{
+        .pwm = .{
+            .active = tripletFn(Gpio.GPIOD_LINE_VALUE_ACTIVE),
+            .inactive = tripletFn(Gpio.GPIOD_LINE_VALUE_INACTIVE),
+            .high_ns = high_ns,
+            .low_ns = low_ns,
+        },
+    };
+}
+
+fn setValues(request: *Gpio.gpiod_line_request, values: [3]Gpio.enum_gpiod_line_value) !void {
+    var mutable = values;
+    if (Gpio.gpiod_line_request_set_values(request, &mutable) != 0) {
+        return error.SetValuesFailed;
+    }
+}
+
+fn tripletsEqual(
+    a: [3]Gpio.enum_gpiod_line_value,
+    b: [3]Gpio.enum_gpiod_line_value,
+) bool {
+    return a[0] == b[0] and a[1] == b[1] and a[2] == b[2];
+}
+
 test "triplet helpers map expected states" {
-    const forward = activeTriplet(Gpio.GPIOD_LINE_VALUE_ACTIVE, Gpio.GPIOD_LINE_VALUE_INACTIVE);
+    const forward = forwardTriplet(Gpio.GPIOD_LINE_VALUE_ACTIVE);
     try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_ACTIVE, forward[0]);
     try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_ACTIVE, forward[1]);
     try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_INACTIVE, forward[2]);
@@ -149,4 +326,35 @@ test "triplet helpers map expected states" {
     try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_INACTIVE, coast[0]);
     try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_INACTIVE, coast[1]);
     try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_INACTIVE, coast[2]);
+}
+
+test "phase uses pwm for partial forward speed" {
+    const phase = phaseFor(.forward, 25);
+
+    switch (phase) {
+        .steady => return error.ExpectedPwmPhase,
+        .pwm => |pwm| {
+            try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_ACTIVE, pwm.active[0]);
+            try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_ACTIVE, pwm.active[1]);
+            try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_INACTIVE, pwm.active[2]);
+            try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_INACTIVE, pwm.inactive[0]);
+            try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_ACTIVE, pwm.inactive[1]);
+            try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_INACTIVE, pwm.inactive[2]);
+            try std.testing.expectEqual(@as(u64, 5 * std.time.ns_per_ms), pwm.high_ns);
+            try std.testing.expectEqual(@as(u64, 15 * std.time.ns_per_ms), pwm.low_ns);
+        },
+    }
+}
+
+test "phase keeps brake steady regardless of speed" {
+    const phase = phaseFor(.brake, 10);
+
+    switch (phase) {
+        .steady => |values| {
+            try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_ACTIVE, values[0]);
+            try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_ACTIVE, values[1]);
+            try std.testing.expectEqual(Gpio.GPIOD_LINE_VALUE_ACTIVE, values[2]);
+        },
+        .pwm => return error.ExpectedSteadyPhase,
+    }
 }

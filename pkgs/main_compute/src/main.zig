@@ -91,4 +91,5 @@ pub fn main() !void {
 test {
     _ = @import("channel.zig");
     _ = @import("protocol.zig");
+    _ = @import("Gpio.zig");
 }
