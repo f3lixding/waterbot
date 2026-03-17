@@ -3,6 +3,7 @@
 Related reading:
 
 - [GPIO concepts](./gpio.md)
+- [Hardware connection guide](./hardware-connection-guide.md)
 
 ## Abstract
 
