@@ -42,9 +42,8 @@ fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
         }
     }.onMessage;
 
-    var buf: [4096]u8 = undefined;
     var tx_ctx = tx;
-    try streamer.listenAndExecute(&buf, &tx_ctx, onMessage);
+    try streamer.serve(&tx_ctx, onMessage);
 }
 
 fn mainLoop(rx: Rx) !void {

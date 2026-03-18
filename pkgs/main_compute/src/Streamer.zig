@@ -2,6 +2,8 @@ const std = @import("std");
 
 const Self = @This();
 
+const MessageHandler = *const fn (std.mem.Allocator, ?*anyopaque, []const u8) anyerror!void;
+
 fd: i32,
 addr: std.net.Address,
 allocator: std.mem.Allocator,
@@ -26,17 +28,53 @@ pub fn deinit(self: *Self) void {
     std.posix.close(self.fd);
 }
 
-pub fn listenAndExecute(
+const ConnectionContext = struct {
+    allocator: std.mem.Allocator,
+    conn_fd: i32,
+    user_ctx: ?*anyopaque,
+    on_message: MessageHandler,
+
+    fn run(self: *ConnectionContext) void {
+        defer self.allocator.destroy(self);
+        handleConnection(self.allocator, self.conn_fd, self.user_ctx, self.on_message) catch |err| {
+            log.err("Connection handler failed: {any}\n", .{err});
+        };
+    }
+};
+
+pub fn serve(
     self: Self,
-    line_buf: []u8,
     ctx: ?*anyopaque,
-    on_message: fn (std.mem.Allocator, ?*anyopaque, []const u8) anyerror!void,
+    on_message: MessageHandler,
 ) !void {
-    const conn_fd = try std.posix.accept(self.fd, null, null, 0);
+    while (true) {
+        const conn_fd = try std.posix.accept(self.fd, null, null, 0);
+        errdefer std.posix.close(conn_fd);
+
+        const connection = try self.allocator.create(ConnectionContext);
+        connection.* = .{
+            .allocator = self.allocator,
+            .conn_fd = conn_fd,
+            .user_ctx = ctx,
+            .on_message = on_message,
+        };
+
+        const thread = try std.Thread.spawn(.{}, ConnectionContext.run, .{connection});
+        thread.detach();
+    }
+}
+
+fn handleConnection(
+    allocator: std.mem.Allocator,
+    conn_fd: i32,
+    ctx: ?*anyopaque,
+    on_message: MessageHandler,
+) !void {
     const file = std.fs.File{ .handle = conn_fd };
     defer file.close();
 
-    var file_reader = file.readerStreaming(line_buf);
+    var line_buf: [4096]u8 = undefined;
+    var file_reader = file.readerStreaming(&line_buf);
     const reader = &file_reader.interface;
     while (true) {
         const msg = reader.takeDelimiter('\n') catch |err| switch (err) {
@@ -44,7 +82,7 @@ pub fn listenAndExecute(
             else => return err,
         } orelse break;
 
-        on_message(self.allocator, ctx, msg) catch |e| {
+        on_message(allocator, ctx, msg) catch |e| {
             log.err("Error deserializing incoming message: {any}\n", .{e});
         };
     }
