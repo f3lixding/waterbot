@@ -51,6 +51,8 @@ pub fn serve(
         const conn_fd = try std.posix.accept(self.fd, null, null, 0);
         errdefer std.posix.close(conn_fd);
 
+        log.info("connection accepted\n", .{});
+
         const connection = try self.allocator.create(ConnectionContext);
         connection.* = .{
             .allocator = self.allocator,
@@ -86,4 +88,6 @@ fn handleConnection(
             log.err("Error deserializing incoming message: {any}\n", .{e});
         };
     }
+
+    log.info("connection closed\n", .{});
 }
