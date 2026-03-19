@@ -62,7 +62,10 @@
             version = "0.0.0";
 
             inherit src nativeBuildInputs;
-            buildInputs = [ targetPkgs.libgpiod ];
+            buildInputs = [
+              targetPkgs.libgpiod
+              targetPkgs.libv4l
+            ];
 
             preBuild = ''
               export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
@@ -155,7 +158,10 @@
 
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs;
-          buildInputs = [ pkgs.libgpiod ];
+          buildInputs = [
+            pkgs.libgpiod
+            pkgs.libv4l
+          ];
           shellHook = ''
             exec ${pkgs.zsh}/bin/zsh
           '';
