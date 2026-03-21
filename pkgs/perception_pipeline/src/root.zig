@@ -9,6 +9,7 @@ const c = @cImport({
 });
 
 test {
+    _ = @import("video_feed.zig");
     const caps: c.struct_v4l2_capability = std.mem.zeroes(c.struct_v4l2_capability);
 
     try std.testing.expect(c.O_RDWR != 0);
