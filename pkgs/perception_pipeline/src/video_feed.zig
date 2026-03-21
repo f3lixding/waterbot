@@ -181,7 +181,7 @@ pub const VideoStreamer = struct {
         self.* = undefined;
     }
 
-    pub fn streamFrames(self: *Self, frame_limit: usize) !void {
+    pub fn streamFrames(self: *Self, frame_limit: usize) !usize {
         if (!self.is_streaming) {
             for (0..self.buffers.len) |i| {
                 var buf: c.struct_v4l2_buffer = std.mem.zeroes(c.struct_v4l2_buffer);
@@ -197,6 +197,7 @@ pub const VideoStreamer = struct {
             self.is_streaming = true;
         }
 
+        var total_bytes: usize = 0;
         for (0..frame_limit) |frame_index| {
             var buf: c.struct_v4l2_buffer = std.mem.zeroes(c.struct_v4l2_buffer);
             buf.type = c.V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -208,7 +209,21 @@ pub const VideoStreamer = struct {
             };
 
             const frame = self.buffers[buf.index].ptr[0..buf.bytesused];
+            total_bytes += frame.len;
             log.info("frame {d}: {d} bytes", .{ frame_index, frame.len });
         }
+
+        return total_bytes;
     }
 };
+
+test "video stream emits bytes" {
+    std.fs.cwd().access(DEFAULT_DEVICE_NAME, .{}) catch return error.SkipZigTest;
+
+    var streamer = try VideoStreamer.init(std.testing.allocator, null);
+    defer streamer.deinit();
+
+    const total_bytes = try streamer.streamFrames(2);
+    std.debug.print("total bytes: {d}\n", .{total_bytes});
+    try std.testing.expect(total_bytes > 0);
+}
