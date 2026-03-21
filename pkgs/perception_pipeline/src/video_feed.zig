@@ -72,6 +72,7 @@ fn xioctl(fd: c_int, request: c_ulong, arg: ?*anyopaque) !void {
     }
 }
 
+/// This struct is _not_ thread safe
 pub const VideoStreamer = struct {
     const Self = @This();
 
