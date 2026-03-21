@@ -45,6 +45,8 @@ const c = @cImport({
     @cInclude("linux/videodev2.h");
 });
 const log = std.log.scoped(.videofeed);
+const Frame = @import("root.zig").Frame;
+const PixelFormat = @import("root.zig").PixelFormat;
 
 const DEFAULT_DEVICE_NAME: [:0]const u8 = "/dev/video0";
 const DEFAULT_PIX_WIDTH: u32 = 640;
@@ -80,6 +82,10 @@ pub const VideoStreamer = struct {
     buffers: []Buffer,
     allocator: Allocator,
     is_streaming: bool,
+    // TODO: make these customizable
+    fmt: PixelFormat = .YUYV,
+    width: u32 = DEFAULT_PIX_WIDTH,
+    height: u32 = DEFAULT_PIX_HEIGHT,
 
     pub fn init(allocator: Allocator, device_name: ?[:0]const u8) !Self {
         const dir = device_name orelse DEFAULT_DEVICE_NAME;
@@ -182,7 +188,7 @@ pub const VideoStreamer = struct {
         self.* = undefined;
     }
 
-    pub fn streamFrames(self: *Self, frame_limit: usize) !usize {
+    pub fn nextFrame(self: *Self) !Frame {
         if (!self.is_streaming) {
             for (0..self.buffers.len) |i| {
                 var buf: c.struct_v4l2_buffer = std.mem.zeroes(c.struct_v4l2_buffer);
@@ -198,33 +204,35 @@ pub const VideoStreamer = struct {
             self.is_streaming = true;
         }
 
-        var total_bytes: usize = 0;
-        for (0..frame_limit) |frame_index| {
-            var buf: c.struct_v4l2_buffer = std.mem.zeroes(c.struct_v4l2_buffer);
-            buf.type = c.V4L2_BUF_TYPE_VIDEO_CAPTURE;
-            buf.memory = c.V4L2_MEMORY_MMAP;
+        var buf: c.struct_v4l2_buffer = std.mem.zeroes(c.struct_v4l2_buffer);
+        buf.type = c.V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = c.V4L2_MEMORY_MMAP;
 
-            try xioctl(self.fd, c.VIDIOC_DQBUF, &buf);
-            defer xioctl(self.fd, c.VIDIOC_QBUF, &buf) catch |err| {
-                log.err("failed to requeue frame buffer {d}: {s}", .{ buf.index, @errorName(err) });
-            };
+        try xioctl(self.fd, c.VIDIOC_DQBUF, &buf);
+        defer xioctl(self.fd, c.VIDIOC_QBUF, &buf) catch |err| {
+            log.err("failed to requeue frame buffer {d}: {s}", .{ buf.index, @errorName(err) });
+        };
 
-            const frame = self.buffers[buf.index].ptr[0..buf.bytesused];
-            total_bytes += frame.len;
-            log.info("frame {d}: {d} bytes", .{ frame_index, frame.len });
-        }
+        const data = self.buffers[buf.index].ptr[0..buf.bytesused];
 
-        return total_bytes;
+        return .{
+            .data = data,
+            .width = self.width,
+            .height = self.height,
+            .fmt = self.fmt,
+        };
     }
 };
 
+// This test uses real /dev so it would only pass if the machine running the
+// test has this device
 test "video stream emits bytes" {
     std.fs.cwd().access(DEFAULT_DEVICE_NAME, .{}) catch return error.SkipZigTest;
 
     var streamer = try VideoStreamer.init(std.testing.allocator, null);
     defer streamer.deinit();
 
-    const total_bytes = try streamer.streamFrames(2);
+    const total_bytes = (try streamer.nextFrame()).data.len;
     std.debug.print("total bytes: {d}\n", .{total_bytes});
     try std.testing.expect(total_bytes > 0);
 }
