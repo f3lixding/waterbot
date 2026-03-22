@@ -50,14 +50,21 @@ pub fn build(b: *std.Build) void {
     linkBridge(b, exe, opencv_prefix, libstdcpp_dir, bridge_lib);
     b.installArtifact(exe);
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
     const run_step = b.step("run", "Print the linked OpenCV major version");
-    run_step.dependOn(&run_cmd.step);
+    if (ldso_path) |interp| {
+        const run_cmd = b.addSystemCommand(&.{interp});
+        run_cmd.addArtifactArg(exe);
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+        run_step.dependOn(&run_cmd.step);
+    } else {
+        const run_cmd = b.addRunArtifact(exe);
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+        run_step.dependOn(&run_cmd.step);
+    }
 
     const smoke = b.addExecutable(.{
         .name = "openzv-smoke",
@@ -75,14 +82,12 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(smoke);
 
     const smoke_step = b.step("smoke", "Run the Zig/OpenCV smoke test");
-    const installed_smoke = b.getInstallPath(.bin, "openzv-smoke");
     if (ldso_path) |interp| {
-        const run_smoke = b.addSystemCommand(&.{ interp, installed_smoke });
-        run_smoke.step.dependOn(b.getInstallStep());
+        const run_smoke = b.addSystemCommand(&.{interp});
+        run_smoke.addArtifactArg(smoke);
         smoke_step.dependOn(&run_smoke.step);
     } else {
         const smoke_run = b.addRunArtifact(smoke);
-        smoke_run.step.dependOn(b.getInstallStep());
         smoke_step.dependOn(&smoke_run.step);
     }
 
@@ -91,8 +96,13 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
         }),
     });
+    linkBridge(b, mod_tests, opencv_prefix, libstdcpp_dir, bridge_lib);
+    if (ldso_path) |interp| {
+        mod_tests.setExecCmd(&.{ interp, null });
+    }
 
     const run_mod_tests = b.addRunArtifact(mod_tests);
     const test_step = b.step("test", "Run tests");
@@ -124,8 +134,9 @@ fn buildBridgeLibrary(
     opencv_prefix: ?[]const u8,
     libstdcpp_dir: ?[]const u8,
 ) std.Build.LazyPath {
-    const cmd = b.addSystemCommand(&.{ cxx_compiler });
+    const cmd = b.addSystemCommand(&.{cxx_compiler});
     cmd.addArgs(&.{ "-std=c++17", "-shared", "-fPIC" });
+    cmd.addArg("-Wl,-soname,libopenzv_bridge.so");
     cmd.addFileArg(b.path("src/wrapper.cpp"));
 
     if (opencv_prefix) |prefix| {
@@ -153,10 +164,12 @@ fn linkBridge(
     c: *std.Build.Step.Compile,
     opencv_prefix: ?[]const u8,
     libstdcpp_dir: ?[]const u8,
-    _: std.Build.LazyPath,
+    bridge_lib: std.Build.LazyPath,
 ) void {
     c.linkLibC();
+    c.root_module.addLibraryPath(bridge_lib.dirname());
     c.root_module.addRPathSpecial("$ORIGIN/../lib");
+    c.root_module.addRPath(bridge_lib.dirname());
 
     if (opencv_prefix) |prefix| {
         const lib_dir = b.pathJoin(&.{ prefix, "lib" });
@@ -166,4 +179,10 @@ fn linkBridge(
     if (libstdcpp_dir) |dir| {
         c.root_module.addRPath(.{ .cwd_relative = dir });
     }
+
+    c.root_module.linkSystemLibrary("openzv_bridge", .{
+        .needed = true,
+        .preferred_link_mode = .dynamic,
+        .use_pkg_config = .no,
+    });
 }

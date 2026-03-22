@@ -2,7 +2,7 @@ const std = @import("std");
 const openzv = @import("openzv");
 
 pub fn main() !void {
-    if (try openzv.opencvVersionMajor() < 4) {
+    if (openzv.opencvVersionMajor() < 4) {
         return error.UnexpectedOpenCvVersion;
     }
 

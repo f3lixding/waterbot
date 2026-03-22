@@ -3,45 +3,18 @@ const std = @import("std");
 pub const OpenCvError = error{
     InvalidBuffer,
     OpenCvFailure,
-    BridgeLoadFailed,
-    BridgeSymbolMissing,
 };
 
-const VersionFn = *const fn () callconv(.c) c_int;
-const GrayFn = *const fn (
+extern fn openzv_opencv_version_major() callconv(.c) c_int;
+extern fn openzv_bgr_to_gray(
     input_bgr: [*]const u8,
     width: c_int,
     height: c_int,
     output_gray: [*]u8,
 ) callconv(.c) c_int;
 
-const Bridge = struct {
-    lib: std.DynLib,
-    version_major: VersionFn,
-    bgr_to_gray: GrayFn,
-};
-
-var bridge: ?Bridge = null;
-
-fn getBridge() OpenCvError!*Bridge {
-    if (bridge == null) {
-        var lib = std.DynLib.open("libopenzv_bridge.so") catch return error.BridgeLoadFailed;
-        const version_fn = lib.lookup(VersionFn, "openzv_opencv_version_major") orelse
-            return error.BridgeSymbolMissing;
-        const gray_fn = lib.lookup(GrayFn, "openzv_bgr_to_gray") orelse
-            return error.BridgeSymbolMissing;
-        bridge = .{
-            .lib = lib,
-            .version_major = version_fn,
-            .bgr_to_gray = gray_fn,
-        };
-    }
-    return &bridge.?;
-}
-
-pub fn opencvVersionMajor() OpenCvError!u32 {
-    const loaded = try getBridge();
-    return @intCast(loaded.version_major());
+pub fn opencvVersionMajor() u32 {
+    return @intCast(openzv_opencv_version_major());
 }
 
 pub fn bgrToGray(
@@ -57,8 +30,7 @@ pub fn bgrToGray(
         return error.InvalidBuffer;
     }
 
-    const loaded = try getBridge();
-    const rc = loaded.bgr_to_gray(
+    const rc = openzv_bgr_to_gray(
         input_bgr.ptr,
         std.math.cast(c_int, width) orelse return error.InvalidBuffer,
         std.math.cast(c_int, height) orelse return error.InvalidBuffer,
