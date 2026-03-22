@@ -229,7 +229,13 @@ pub const VideoStreamer = struct {
 test "video stream emits bytes" {
     std.fs.cwd().access(DEFAULT_DEVICE_NAME, .{}) catch return error.SkipZigTest;
 
-    var streamer = try VideoStreamer.init(std.testing.allocator, null);
+    var streamer = VideoStreamer.init(std.testing.allocator, null) catch |err| switch (err) {
+        error.BadDevice,
+        error.NoCaptureDevice,
+        error.NoStreamingDevice,
+        => return error.SkipZigTest,
+        else => return err,
+    };
     defer streamer.deinit();
 
     const total_bytes = (try streamer.nextFrame()).data.len;

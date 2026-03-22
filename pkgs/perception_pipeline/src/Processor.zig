@@ -18,7 +18,7 @@ ptr: *anyopaque,
 vtable: *const VTable,
 
 pub const VTable = struct {
-    process: fn (
+    process: *const fn (
         *anyopaque,
         *anyopaque,
         Frame,
@@ -35,7 +35,7 @@ pub fn initAsProcessor(comptime C: type, comptime T: type, ptr: *T) Processor {
                 fn call(raw: *anyopaque, ctx: *anyopaque, frame: Frame) anyerror!void {
                     const self: *T = @ptrCast(@alignCast(raw));
                     const ctx_typed: *C = @ptrCast(@alignCast(ctx));
-                    self.process(ctx_typed, frame);
+                    try self.process(ctx_typed, frame);
                 }
             }.call,
         },
@@ -45,5 +45,30 @@ pub fn initAsProcessor(comptime C: type, comptime T: type, ptr: *T) Processor {
 /// Process the frame and update the context passed
 /// If the return is an error it signifies that the Frame should be discarded
 pub fn process(self: Processor, ctx: *anyopaque, frame: Frame) !void {
-    self.process(ctx, frame);
+    try self.vtable.process(self.ptr, ctx, frame);
+}
+
+test "processor dispatches through its vtable" {
+    const Ctx = struct {
+        bytes_seen: usize = 0,
+    };
+
+    const Counter = struct {
+        pub fn process(_: *@This(), ctx: *Ctx, frame: Frame) !void {
+            ctx.bytes_seen += frame.data.len;
+        }
+    };
+
+    var counter = Counter{};
+    const processor = initAsProcessor(Ctx, Counter, &counter);
+    var ctx = Ctx{};
+
+    try processor.process(&ctx, .{
+        .data = "frame-bytes",
+        .width = 1,
+        .height = 1,
+        .fmt = .JPEG,
+    });
+
+    try std.testing.expectEqual(@as(usize, "frame-bytes".len), ctx.bytes_seen);
 }
