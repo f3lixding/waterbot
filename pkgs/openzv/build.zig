@@ -29,9 +29,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
     const bridge_lib = buildBridgeLibrary(b, cxx_compiler, opencv_prefix, libstdcpp_dir);
+    b.addNamedLazyPath("openzv_bridge", bridge_lib);
     const install_bridge = b.addInstallFile(bridge_lib, "lib/libopenzv_bridge.so");
     b.getInstallStep().dependOn(&install_bridge.step);
 
@@ -128,6 +130,13 @@ fn resolveOpenCvPrefix(b: *std.Build, provided: ?[]const u8) ?[]const u8 {
     return b.dupe(trimmed);
 }
 
+/// Build the OpenCV bridge with the Nix-provided C++ driver instead of Zig's
+/// native C++ library path. Modeling this bridge as a first-class Zig library
+/// artifact pulled the build back into Zig's libc++/libgcc assumptions under
+/// Nix, which reintroduced the header/runtime/linker failures we had already
+/// worked around. Keeping the wrapper in the GCC/libstdc++ toolchain via
+/// `c++ -shared` has been the stable path, so downstream users consume the
+/// resulting `.so` through the named lazy path and link it explicitly.
 fn buildBridgeLibrary(
     b: *std.Build,
     cxx_compiler: []const u8,

@@ -60,8 +60,12 @@
           { name, src }:
           let
             targetPkgs = if system == "x86_64-linux" then pkgs.pkgsCross.aarch64-multiplatform else pkgs;
-            extraBuildInputs = pkgs.lib.optionals (name == "openzv") [ targetPkgs.opencv ];
-            extraBuildFlags = pkgs.lib.optionals (name == "openzv") [
+            needsOpenzvToolchain = builtins.elem name [
+              "openzv"
+              "main_compute"
+            ];
+            extraBuildInputs = pkgs.lib.optionals needsOpenzvToolchain [ targetPkgs.opencv ];
+            extraBuildFlags = pkgs.lib.optionals needsOpenzvToolchain [
               "-Dopencv-prefix=${targetPkgs.opencv}"
               "-Dcxx-compiler=${targetPkgs.stdenv.cc}/bin/${targetPkgs.stdenv.cc.targetPrefix}c++"
               "-Dldso-path=${targetPkgs.stdenv.cc.libc.out}/lib/ld-linux-aarch64.so.1"

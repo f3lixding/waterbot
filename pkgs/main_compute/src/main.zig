@@ -151,4 +151,7 @@ test {
     _ = @import("channel.zig");
     _ = @import("protocol.zig");
     _ = @import("Gpio.zig");
+    const openzv = @import("openzv");
+    const version = openzv.opencvVersionMajor();
+    std.debug.print("version: {d}\n", .{version});
 }
