@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 const Processor = @import("Processor.zig");
 const Frame = @import("root.zig").Frame;
 const PerceptionSpec = @import("root.zig").PerceptionSpec;
+const VideoStreamer = @import("video_feed.zig").VideoStreamer;
 
 pub const Stage = struct {
     perception: PerceptionSpec,
@@ -24,8 +25,10 @@ pub const PipelineConfig = struct {
 
 allocator: Allocator,
 stages: []Stage,
+video_streamer: ?VideoStreamer,
 
 pub fn init(alloc: Allocator, config: PipelineConfig) !Self {
+    var video_streamer: ?VideoStreamer = null;
     var stages = try alloc.alloc(Stage, config.stages.len);
     errdefer alloc.free(stages);
     var owned_dep_count: usize = 0;
@@ -33,12 +36,21 @@ pub fn init(alloc: Allocator, config: PipelineConfig) !Self {
         for (stages[0..owned_dep_count]) |stage| {
             alloc.free(stage.depends_on);
         }
+        if (video_streamer) |*vs| {
+            vs.deinit();
+        }
     }
 
     for (config.stages, 0..) |stage, i| {
         stages[i] = stage;
         stages[i].depends_on = try alloc.dupe(usize, stage.depends_on);
         owned_dep_count = i + 1;
+
+        if (stage.perception == .Vision) {
+            if (video_streamer == null) {
+                video_streamer = try VideoStreamer.init(alloc, null);
+            }
+        }
     }
 
     try validateStages(stages);
@@ -46,6 +58,7 @@ pub fn init(alloc: Allocator, config: PipelineConfig) !Self {
     return .{
         .allocator = alloc,
         .stages = stages,
+        .video_streamer = video_streamer,
     };
 }
 
@@ -71,55 +84,45 @@ pub fn deinit(self: *Self) void {
     self.* = undefined;
 }
 
-pub fn tick(self: Self, ctx: *anyopaque, frame: Frame) !void {
+pub fn tick(self: *Self, ctx: *anyopaque) !void {
     for (self.stages) |stage| {
+        const frame = blk: {
+            switch (stage.perception) {
+                // TODO: make use of the spec
+                .Vision => {
+                    if (self.video_streamer) |*vs| {
+                        break :blk try vs.nextFrame();
+                    } else return error.MissingVideoStreamer;
+                },
+                else => return error.NotYetSupported,
+            }
+        };
         try stage.processor.process(ctx, frame);
     }
 }
 
-test "pipeline ticks stages in order" {
-    const Ctx = struct {
-        calls: [2]u8 = .{ 0, 0 },
-        next_idx: usize = 0,
-    };
+test "pipeline tick fails when a vision stage has no streamer" {
+    const Ctx = struct {};
 
     const Recorder = struct {
-        id: u8,
-
-        pub fn process(self: *@This(), ctx: *Ctx, frame: Frame) !void {
-            _ = frame;
-            ctx.calls[ctx.next_idx] = self.id;
-            ctx.next_idx += 1;
-        }
+        pub fn process(_: *@This(), _: *Ctx, _: Frame) !void {}
     };
 
-    var first = Recorder{ .id = 1 };
-    var second = Recorder{ .id = 2 };
-
-    var pipeline = try init(std.testing.allocator, .{
-        .stages = &.{
-            .{
-                .perception = .{ .Vision = .{} },
-                .processor = Processor.initAsProcessor(Ctx, Recorder, &first),
-            },
-            .{
-                .perception = .{ .Vision = .{} },
-                .processor = Processor.initAsProcessor(Ctx, Recorder, &second),
-                .depends_on = &.{0},
-            },
+    var recorder = Recorder{};
+    var stages = [_]Stage{
+        .{
+            .perception = .{ .Vision = .{} },
+            .processor = Processor.initAsProcessor(Ctx, Recorder, &recorder),
         },
-    });
-    defer pipeline.deinit();
+    };
+    var pipeline = Self{
+        .allocator = std.testing.allocator,
+        .stages = stages[0..],
+        .video_streamer = null,
+    };
 
     var ctx = Ctx{};
-    try pipeline.tick(&ctx, .{
-        .data = "frame",
-        .width = 1,
-        .height = 1,
-        .fmt = .JPEG,
-    });
-
-    try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, &ctx.calls);
+    try std.testing.expectError(error.MissingVideoStreamer, pipeline.tick(&ctx));
 }
 
 test "pipeline rejects forward dependencies" {
@@ -127,17 +130,15 @@ test "pipeline rejects forward dependencies" {
         pub fn process(_: *@This(), _: *void, _: Frame) !void {}
     }{};
 
-    try std.testing.expectError(error.StageDependencyMustPrecedeConsumer, init(std.testing.allocator, .{
-        .stages = &.{
-            .{
-                .perception = .{ .Vision = .{} },
-                .processor = Processor.initAsProcessor(void, @TypeOf(noop), &noop),
-                .depends_on = &.{1},
-            },
-            .{
-                .perception = .{ .Vision = .{} },
-                .processor = Processor.initAsProcessor(void, @TypeOf(noop), &noop),
-            },
+    try std.testing.expectError(error.StageDependencyMustPrecedeConsumer, validateStages(&.{
+        .{
+            .perception = .{ .Vision = .{} },
+            .processor = Processor.initAsProcessor(void, @TypeOf(noop), &noop),
+            .depends_on = &.{1},
+        },
+        .{
+            .perception = .{ .Vision = .{} },
+            .processor = Processor.initAsProcessor(void, @TypeOf(noop), &noop),
         },
     }));
 }
