@@ -23,4 +23,6 @@ pub const VideoStreamer = @import("video_feed.zig").VideoStreamer;
 
 test {
     _ = @import("video_feed.zig");
+    _ = @import("Processor.zig");
+    _ = @import("Pipeline.zig");
 }
