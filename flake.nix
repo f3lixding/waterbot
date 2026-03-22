@@ -50,6 +50,7 @@
           zig
           pkgs.zls_0_15
           pkgs.patchelf
+          pkgs.pkg-config
         ];
 
         # Because we are building this for raspberry pi 5
@@ -59,6 +60,13 @@
           { name, src }:
           let
             targetPkgs = if system == "x86_64-linux" then pkgs.pkgsCross.aarch64-multiplatform else pkgs;
+            extraBuildInputs = pkgs.lib.optionals (name == "openzv") [ targetPkgs.opencv ];
+            extraBuildFlags = pkgs.lib.optionals (name == "openzv") [
+              "-Dopencv-prefix=${targetPkgs.opencv}"
+              "-Dcxx-compiler=${targetPkgs.stdenv.cc}/bin/${targetPkgs.stdenv.cc.targetPrefix}c++"
+              "-Dldso-path=${targetPkgs.stdenv.cc.libc.out}/lib/ld-linux-aarch64.so.1"
+              "-Dlibstdcpp-dir=${targetPkgs.stdenv.cc.cc.lib}/lib"
+            ];
 
             stdenvFor = targetPkgs.stdenv;
 
@@ -88,7 +96,7 @@
             buildInputs = [
               targetPkgs.libgpiod
               targetPkgs.libv4l
-            ];
+            ] ++ extraBuildInputs;
 
             preBuild = ''
               export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
@@ -108,6 +116,7 @@
                 -Dtarget=${zigTarget} \
                 -Doptimize=ReleaseSafe \
                 -Dgpiod-prefix=${targetPkgs.libgpiod} \
+                ${pkgs.lib.concatStringsSep " \\\n                " extraBuildFlags} \
                 -p "$out"
             '';
 
@@ -176,6 +185,46 @@
           zigPackages
           // (if defaultPkgName == null then { } else { default = zigPackages.${defaultPkgName}; });
 
+        checks =
+          pkgs.lib.optionalAttrs (builtins.hasAttr "openzv" zigPackages)
+            {
+              openzv = pkgs.stdenv.mkDerivation {
+                pname = "openzv-tests";
+                version = "0.0.0";
+                src = pkgsDir + "/openzv";
+                nativeBuildInputs = nativeBuildInputs;
+                buildInputs = [
+                  pkgs.opencv
+                  pkgs.stdenv.cc.cc
+                  pkgs.stdenv.cc
+                ];
+
+                buildPhase = ''
+                  export HOME="$TMPDIR"
+                  export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+                  export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-cache-local"
+                  mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
+                  zig build test \
+                    -Doptimize=ReleaseSafe \
+                    -Dopencv-prefix=${pkgs.opencv} \
+                    -Dcxx-compiler=${pkgs.stdenv.cc}/bin/c++ \
+                    -Dldso-path=${pkgs.stdenv.cc.libc.out}/lib/ld-linux-x86-64.so.2 \
+                    -Dlibstdcpp-dir=${pkgs.stdenv.cc.cc.lib}/lib
+
+                  zig build smoke \
+                    -Doptimize=ReleaseSafe \
+                    -Dopencv-prefix=${pkgs.opencv} \
+                    -Dcxx-compiler=${pkgs.stdenv.cc}/bin/c++ \
+                    -Dldso-path=${pkgs.stdenv.cc.libc.out}/lib/ld-linux-x86-64.so.2 \
+                    -Dlibstdcpp-dir=${pkgs.stdenv.cc.cc.lib}/lib
+                '';
+
+                installPhase = ''
+                  touch "$out"
+                '';
+              };
+            };
+
         apps.build = flake-utils.lib.mkApp { drv = buildApp; };
         apps.deploy = flake-utils.lib.mkApp { drv = deployApp; };
 
@@ -184,6 +233,7 @@
           buildInputs = [
             pkgs.libgpiod
             pkgs.libv4l
+            pkgs.opencv
           ];
           shellHook = ''
             exec ${pkgs.zsh}/bin/zsh
