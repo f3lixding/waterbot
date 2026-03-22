@@ -19,7 +19,30 @@
       let
         pkgs = import nixpkgs {
           inherit system;
-          overlays = [ zig-overlay.overlays.default ];
+          overlays = [
+            zig-overlay.overlays.default
+            (
+              final: prev:
+              if prev.stdenv.buildPlatform != prev.stdenv.hostPlatform then
+                {
+                  # Cross builds of gnutls try to execute a target-built helper while
+                  # generating docs. Disable docs for cross package sets so transitive
+                  # libv4l users remain cross-compilable.
+                  gnutls = prev.gnutls.overrideAttrs (old: {
+                    configureFlags = (old.configureFlags or [ ]) ++ [ "--disable-doc" ];
+                    outputs = [
+                      "bin"
+                      "dev"
+                      "out"
+                    ];
+                    outputInfo = "dev";
+                    outputDoc = "dev";
+                  });
+                }
+              else
+                { }
+            )
+          ];
         };
 
         zig = pkgs.zigpkgs."0.15.2";
