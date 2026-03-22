@@ -20,7 +20,7 @@ Examples:
 EOF
 }
 
-verify_no_gpiod_runtime_dep() {
+verify_bundled_runtime_deps() {
   local bin_path="$1"
   local bundle_dir="$2"
 
@@ -31,12 +31,22 @@ verify_no_gpiod_runtime_dep() {
 
   if readelf -d "${bin_path}" 2>/dev/null | grep -Fq 'libgpiod.so'; then
     if [[ -d "${bundle_dir}" ]] && find "${bundle_dir}" -maxdepth 1 -name 'libgpiod.so*' | grep -q .; then
-      return 0
+      :
+    else
+      echo "Refusing to continue: ${bin_path} still has a runtime dependency on libgpiod.so but no bundled lib/ was found" >&2
+      readelf -d "${bin_path}" >&2
+      exit 1
     fi
+  fi
 
-    echo "Refusing to continue: ${bin_path} still has a runtime dependency on libgpiod.so but no bundled lib/ was found" >&2
-    readelf -d "${bin_path}" >&2
-    exit 1
+  if readelf -d "${bin_path}" 2>/dev/null | grep -Fq 'libopencv'; then
+    if [[ -d "${bundle_dir}" ]] && find "${bundle_dir}" -maxdepth 1 -name 'libopencv*.so*' | grep -q .; then
+      :
+    else
+      echo "Refusing to continue: ${bin_path} still has a runtime dependency on libopencv*.so but no bundled lib/ was found" >&2
+      readelf -d "${bin_path}" >&2
+      exit 1
+    fi
   fi
 }
 
@@ -113,7 +123,7 @@ if [[ -d "./result/bin" ]]; then
 
   for bin_path in "${built_bins[@]}"; do
     if [[ -f "${bin_path}" && -x "${bin_path}" ]]; then
-      verify_no_gpiod_runtime_dep "${bin_path}" "./result/lib"
+      verify_bundled_runtime_deps "${bin_path}" "./result/lib"
     fi
   done
 fi

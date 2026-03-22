@@ -91,7 +91,6 @@ fn addSharedDeps(c: *std.Build.Step.Compile, deps: []const SharedDeps) void {
 fn linkOpenzvBridge(c: *std.Build.Step.Compile, bridge_lib: std.Build.LazyPath) void {
     c.root_module.addLibraryPath(bridge_lib.dirname());
     c.root_module.addRPathSpecial("$ORIGIN/../lib");
-    c.root_module.addRPath(bridge_lib.dirname());
     c.root_module.linkSystemLibrary("openzv_bridge", .{
         .needed = true,
         .preferred_link_mode = .dynamic,

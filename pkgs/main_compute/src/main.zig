@@ -9,6 +9,7 @@ const Tx = Spsc.Tx;
 const Rx = Spsc.Rx;
 const logging = @import("logging.zig");
 const Gpio = @import("Gpio.zig");
+const openzv = @import("openzv");
 
 const SOCKET_PATH: []const u8 = "/tmp/main_compute.sock";
 
@@ -133,6 +134,12 @@ pub fn main() !void {
     try logging.init();
     defer logging.deinit();
 
+    // This is just here to ensure we can deploy for now
+    // TODO: remove this
+    const version = openzv.opencvVersionMajor();
+    const log = std.log.scoped(.main_entry);
+    log.info("Running OpenCV version: {d}\n", .{version});
+
     const server_thread = try std.Thread.spawn(.{}, spawnServer, .{ allocator, SOCKET_PATH });
     defer server_thread.join();
 
@@ -151,7 +158,6 @@ test {
     _ = @import("channel.zig");
     _ = @import("protocol.zig");
     _ = @import("Gpio.zig");
-    const openzv = @import("openzv");
     const version = openzv.opencvVersionMajor();
     std.debug.print("version: {d}\n", .{version});
 }
