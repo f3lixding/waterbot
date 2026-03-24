@@ -8,8 +8,8 @@ IMAGE_NAME="${IMAGE_DATE}-raspios-trixie-${IMAGE_ARCH}-${IMAGE_FLAVOR}.img.xz"
 IMAGE_URL="https://downloads.raspberrypi.com/raspios_${IMAGE_FLAVOR}_${IMAGE_ARCH}/images/raspios_${IMAGE_FLAVOR}_${IMAGE_ARCH}-${IMAGE_DATE}/${IMAGE_NAME}"
 IMAGE_SHA256="681a775e20b53a9e4c7341d748a5a8cdc822039d8c67c1fd6ca35927abbe6290"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOWNLOAD_DIR="${SCRIPT_DIR}/../.cache/raspios"
+CACHE_ROOT="${XDG_CACHE_HOME:-${HOME}/.cache}"
+DOWNLOAD_DIR="${CACHE_ROOT}/waterbot/raspios"
 
 print_usage() {
   cat <<EOF
@@ -21,6 +21,10 @@ Options:
   --wifi-ssid <ssid>    Configure Wi-Fi SSID for first boot.
   --wifi-password <pw>  Configure Wi-Fi password for first boot.
   --wifi-country <cc>   Two-letter regulatory country code, e.g. US.
+  --hostname <name>     Set the Raspberry Pi hostname on first boot.
+  --user <name>         Create a login user on first boot.
+  --password <pw>       Set the created user's password on first boot.
+  --ssh-public-key <k>  Add an SSH public key for the created user.
   --image-url <url>     Override the image URL.
   --sha256 <hash>       Override the expected SHA256 hash.
   --yes                 Skip the interactive confirmation prompt.
@@ -35,6 +39,8 @@ Notes:
     streams it to the target device with dd.
   - On Raspberry Pi OS Trixie, Wi-Fi preconfiguration is written to the boot
     partition's cloud-init network-config file after flashing.
+  - Headless user/SSH setup is written to the boot partition's cloud-init
+    user-data file after flashing.
   - It must be run with privileges that can write to the target block device.
   - All data on the target device will be destroyed.
 EOF
@@ -62,6 +68,10 @@ assume_yes=0
 wifi_ssid=""
 wifi_password=""
 wifi_country=""
+hostname=""
+user_name=""
+user_password=""
+ssh_public_key=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -83,6 +93,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --wifi-country)
       wifi_country="${2:-}"
+      shift 2
+      ;;
+    --hostname)
+      hostname="${2:-}"
+      shift 2
+      ;;
+    --user)
+      user_name="${2:-}"
+      shift 2
+      ;;
+    --password)
+      user_password="${2:-}"
+      shift 2
+      ;;
+    --ssh-public-key)
+      ssh_public_key="${2:-}"
       shift 2
       ;;
     --sha256)
@@ -123,9 +149,25 @@ if [[ -n "${wifi_ssid}" || -n "${wifi_password}" || -n "${wifi_country}" ]]; the
   fi
 fi
 
+if [[ -n "${user_name}" || -n "${user_password}" || -n "${ssh_public_key}" ]]; then
+  if [[ -z "${user_name}" ]]; then
+    echo "Headless user configuration requires --user." >&2
+    exit 1
+  fi
+
+  if [[ -z "${user_password}" && -z "${ssh_public_key}" ]]; then
+    echo "Headless user configuration requires either --password or --ssh-public-key." >&2
+    exit 1
+  fi
+fi
+
 wifi_ssid_escaped="$(yaml_escape "${wifi_ssid}")"
 wifi_password_escaped="$(yaml_escape "${wifi_password}")"
 wifi_country_escaped="$(yaml_escape "${wifi_country}")"
+hostname_escaped="$(yaml_escape "${hostname}")"
+user_name_escaped="$(yaml_escape "${user_name}")"
+user_password_escaped="$(yaml_escape "${user_password}")"
+ssh_public_key_escaped="$(yaml_escape "${ssh_public_key}")"
 
 require_command curl
 require_command sha256sum
@@ -136,7 +178,6 @@ require_command lsblk
 require_command mount
 require_command umount
 require_command mountpoint
-require_command partprobe
 require_command mktemp
 require_command cp
 
@@ -178,9 +219,14 @@ echo "SHA256 verified."
 echo "Flashing ${device}..."
 xzcat "${archive_path}" | sudo dd of="${device}" bs=4M iflag=fullblock status=progress conv=fsync
 sync
-sudo partprobe "${device}"
+if command -v partprobe >/dev/null 2>&1; then
+  sudo partprobe "${device}"
+else
+  echo "partprobe not found; waiting briefly for partition table refresh."
+  sleep 2
+fi
 
-if [[ -n "${wifi_ssid}" ]]; then
+if [[ -n "${wifi_ssid}" || -n "${hostname}" || -n "${user_name}" ]]; then
   boot_partition="$(lsblk -lnpo NAME "${device}" | sed -n '2p')"
   if [[ -z "${boot_partition}" ]]; then
     echo "Could not determine boot partition for ${device}" >&2
@@ -188,17 +234,22 @@ if [[ -n "${wifi_ssid}" ]]; then
   fi
 
   mount_dir="$(mktemp -d)"
+  network_config_tmp=""
+  user_data_tmp=""
   cleanup() {
     if mountpoint -q "${mount_dir}"; then
       sudo umount "${mount_dir}"
     fi
+    rm -f "${network_config_tmp}" "${user_data_tmp}"
     rmdir "${mount_dir}" 2>/dev/null || true
   }
   trap cleanup EXIT
 
   echo "Mounting boot partition ${boot_partition}..."
   sudo mount "${boot_partition}" "${mount_dir}"
+fi
 
+if [[ -n "${wifi_ssid}" ]]; then
   network_config_tmp="$(mktemp)"
   cat > "${network_config_tmp}" <<EOF
 network:
@@ -216,11 +267,52 @@ EOF
 
   sudo cp "${network_config_tmp}" "${mount_dir}/network-config"
   rm -f "${network_config_tmp}"
-  sync
-  sudo umount "${mount_dir}"
-  rmdir "${mount_dir}"
-  trap - EXIT
   echo "Wrote cloud-init Wi-Fi configuration."
+fi
+
+if [[ -n "${hostname}" || -n "${user_name}" ]]; then
+  user_data_tmp="$(mktemp)"
+  {
+    echo "#cloud-config"
+    if [[ -n "${hostname}" ]]; then
+      echo "hostname: ${hostname_escaped}"
+      echo "manage_etc_hosts: true"
+    fi
+    if [[ -n "${user_name}" ]]; then
+      cat <<EOF
+users:
+  - name: ${user_name_escaped}
+    groups: users,adm,dialout,audio,netdev,video,plugdev,cdrom,games,input,gpio,spi,i2c,render,sudo
+    shell: /bin/bash
+    lock_passwd: false
+EOF
+      if [[ -n "${user_password}" ]]; then
+        echo "    plain_text_passwd: \"${user_password_escaped}\""
+      fi
+      if [[ -n "${ssh_public_key}" ]]; then
+        cat <<EOF
+    ssh_authorized_keys:
+      - "${ssh_public_key_escaped}"
+EOF
+      fi
+      echo "    sudo: \"ALL=(ALL) NOPASSWD:ALL\""
+    fi
+    echo "enable_ssh: true"
+    if [[ -n "${user_password}" ]]; then
+      echo "ssh_pwauth: true"
+    elif [[ -n "${ssh_public_key}" ]]; then
+      echo "ssh_pwauth: false"
+    fi
+  } > "${user_data_tmp}"
+
+  sudo cp "${user_data_tmp}" "${mount_dir}/user-data"
+  echo "Wrote cloud-init user-data for headless SSH setup."
+fi
+
+if [[ -n "${wifi_ssid}" || -n "${hostname}" || -n "${user_name}" ]]; then
+  sync
+  cleanup
+  trap - EXIT
 fi
 
 echo "Flash complete."
