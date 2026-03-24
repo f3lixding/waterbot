@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE_DATE="2025-12-04"
+IMAGE_FLAVOR="lite"
+IMAGE_ARCH="arm64"
+IMAGE_NAME="${IMAGE_DATE}-raspios-trixie-${IMAGE_ARCH}-${IMAGE_FLAVOR}.img.xz"
+IMAGE_URL="https://downloads.raspberrypi.com/raspios_${IMAGE_FLAVOR}_${IMAGE_ARCH}/images/raspios_${IMAGE_FLAVOR}_${IMAGE_ARCH}-${IMAGE_DATE}/${IMAGE_NAME}"
+IMAGE_SHA256="681a775e20b53a9e4c7341d748a5a8cdc822039d8c67c1fd6ca35927abbe6290"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DOWNLOAD_DIR="${SCRIPT_DIR}/../.cache/raspios"
+
+print_usage() {
+  cat <<EOF
+Usage:
+  $(basename "$0") --device <path> [options]
+
+Options:
+  --device <path>       Block device to flash, e.g. /dev/sdb or /dev/mmcblk0.
+  --wifi-ssid <ssid>    Configure Wi-Fi SSID for first boot.
+  --wifi-password <pw>  Configure Wi-Fi password for first boot.
+  --wifi-country <cc>   Two-letter regulatory country code, e.g. US.
+  --image-url <url>     Override the image URL.
+  --sha256 <hash>       Override the expected SHA256 hash.
+  --yes                 Skip the interactive confirmation prompt.
+  -h, --help            Show this help text.
+
+Defaults:
+  Image URL:  ${IMAGE_URL}
+  SHA256:     ${IMAGE_SHA256}
+
+Notes:
+  - This script downloads the compressed image, verifies its SHA256, and then
+    streams it to the target device with dd.
+  - On Raspberry Pi OS Trixie, Wi-Fi preconfiguration is written to the boot
+    partition's cloud-init network-config file after flashing.
+  - It must be run with privileges that can write to the target block device.
+  - All data on the target device will be destroyed.
+EOF
+}
+
+require_command() {
+  local cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Missing required command: $cmd" >&2
+    exit 1
+  fi
+}
+
+yaml_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '%s' "${value}"
+}
+
+device=""
+image_url="${IMAGE_URL}"
+expected_sha256="${IMAGE_SHA256}"
+assume_yes=0
+wifi_ssid=""
+wifi_password=""
+wifi_country=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --device)
+      device="${2:-}"
+      shift 2
+      ;;
+    --image-url)
+      image_url="${2:-}"
+      shift 2
+      ;;
+    --wifi-ssid)
+      wifi_ssid="${2:-}"
+      shift 2
+      ;;
+    --wifi-password)
+      wifi_password="${2:-}"
+      shift 2
+      ;;
+    --wifi-country)
+      wifi_country="${2:-}"
+      shift 2
+      ;;
+    --sha256)
+      expected_sha256="${2:-}"
+      shift 2
+      ;;
+    --yes)
+      assume_yes=1
+      shift
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      print_usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "${device}" ]]; then
+  echo "--device is required." >&2
+  print_usage >&2
+  exit 1
+fi
+
+if [[ ! -b "${device}" ]]; then
+  echo "Target is not a block device: ${device}" >&2
+  exit 1
+fi
+
+if [[ -n "${wifi_ssid}" || -n "${wifi_password}" || -n "${wifi_country}" ]]; then
+  if [[ -z "${wifi_ssid}" || -z "${wifi_password}" || -z "${wifi_country}" ]]; then
+    echo "Wi-Fi configuration requires --wifi-ssid, --wifi-password, and --wifi-country together." >&2
+    exit 1
+  fi
+fi
+
+wifi_ssid_escaped="$(yaml_escape "${wifi_ssid}")"
+wifi_password_escaped="$(yaml_escape "${wifi_password}")"
+wifi_country_escaped="$(yaml_escape "${wifi_country}")"
+
+require_command curl
+require_command sha256sum
+require_command xzcat
+require_command dd
+require_command sync
+require_command lsblk
+require_command mount
+require_command umount
+require_command mountpoint
+require_command partprobe
+require_command mktemp
+require_command cp
+
+mkdir -p "${DOWNLOAD_DIR}"
+archive_path="${DOWNLOAD_DIR}/$(basename "${image_url}")"
+
+echo "Target device:"
+lsblk -o NAME,SIZE,MODEL,TRAN "${device}"
+echo
+echo "Image URL: ${image_url}"
+echo "Expected SHA256: ${expected_sha256}"
+echo "Archive path: ${archive_path}"
+echo
+
+if [[ ${assume_yes} -ne 1 ]]; then
+  read -r -p "Type 'flash' to overwrite ${device}: " confirmation
+  if [[ "${confirmation}" != "flash" ]]; then
+    echo "Aborted."
+    exit 1
+  fi
+fi
+
+if [[ ! -f "${archive_path}" ]]; then
+  echo "Downloading image..."
+  curl -L --fail --output "${archive_path}" "${image_url}"
+else
+  echo "Using existing download: ${archive_path}"
+fi
+
+actual_sha256="$(sha256sum "${archive_path}" | awk '{print $1}')"
+if [[ "${actual_sha256}" != "${expected_sha256}" ]]; then
+  echo "SHA256 mismatch for ${archive_path}" >&2
+  echo "Expected: ${expected_sha256}" >&2
+  echo "Actual:   ${actual_sha256}" >&2
+  exit 1
+fi
+
+echo "SHA256 verified."
+echo "Flashing ${device}..."
+xzcat "${archive_path}" | sudo dd of="${device}" bs=4M iflag=fullblock status=progress conv=fsync
+sync
+sudo partprobe "${device}"
+
+if [[ -n "${wifi_ssid}" ]]; then
+  boot_partition="$(lsblk -lnpo NAME "${device}" | sed -n '2p')"
+  if [[ -z "${boot_partition}" ]]; then
+    echo "Could not determine boot partition for ${device}" >&2
+    exit 1
+  fi
+
+  mount_dir="$(mktemp -d)"
+  cleanup() {
+    if mountpoint -q "${mount_dir}"; then
+      sudo umount "${mount_dir}"
+    fi
+    rmdir "${mount_dir}" 2>/dev/null || true
+  }
+  trap cleanup EXIT
+
+  echo "Mounting boot partition ${boot_partition}..."
+  sudo mount "${boot_partition}" "${mount_dir}"
+
+  network_config_tmp="$(mktemp)"
+  cat > "${network_config_tmp}" <<EOF
+network:
+  version: 2
+  wifis:
+    renderer: NetworkManager
+    wlan0:
+      dhcp4: true
+      regulatory-domain: "${wifi_country_escaped}"
+      access-points:
+        "${wifi_ssid_escaped}":
+          password: "${wifi_password_escaped}"
+      optional: true
+EOF
+
+  sudo cp "${network_config_tmp}" "${mount_dir}/network-config"
+  rm -f "${network_config_tmp}"
+  sync
+  sudo umount "${mount_dir}"
+  rmdir "${mount_dir}"
+  trap - EXIT
+  echo "Wrote cloud-init Wi-Fi configuration."
+fi
+
+echo "Flash complete."

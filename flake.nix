@@ -225,6 +225,13 @@
             exec ${./scripts/deploy-core.sh} deploy "$@"
           '';
         };
+
+        flashRaspiosApp = pkgs.writeShellApplication {
+          name = "waterbot-flash-raspios";
+          text = ''
+            exec ${./scripts/flash-raspios} "$@"
+          '';
+        };
       in
       {
         packages =
@@ -271,6 +278,7 @@
 
         apps.build = flake-utils.lib.mkApp { drv = buildApp; };
         apps.deploy = flake-utils.lib.mkApp { drv = deployApp; };
+        apps.flash-raspios = flake-utils.lib.mkApp { drv = flashRaspiosApp; };
 
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs;
