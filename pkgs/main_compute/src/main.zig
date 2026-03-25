@@ -18,6 +18,16 @@ pub const std_options: std.Options = .{
     .logFn = logging.logFn,
 };
 
+// TODO: enrich this with other fields that are needed for our usecase
+pub const PipelineCtx = struct {
+    pub const Dir = enum {
+        Left,
+        Right,
+        Center,
+    };
+    offset_dir: Dir,
+};
+
 fn preStart(allocator: Allocator) !Streamer {
     if (std.fs.accessAbsolute(SOCKET_PATH, .{})) |_| {
         try std.fs.deleteFileAbsolute(SOCKET_PATH);

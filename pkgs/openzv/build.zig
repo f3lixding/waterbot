@@ -158,7 +158,7 @@ fn buildBridgeLibrary(
         cmd.addArgs(&.{ "-I", include_dir });
         cmd.addArgs(&.{ "-L", lib_dir });
         cmd.addArg(b.fmt("-Wl,-rpath,{s}", .{rpath}));
-        cmd.addArgs(&.{ "-lopencv_core", "-lopencv_imgproc" });
+        cmd.addArgs(&.{ "-lopencv_core", "-lopencv_imgproc", "-lopencv_imgcodecs" });
     }
 
     if (libstdcpp_dir) |dir| {
