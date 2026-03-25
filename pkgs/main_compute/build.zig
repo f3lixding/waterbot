@@ -18,6 +18,10 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const pp = b.dependency("perception_pipeline", .{
+        .target = target,
+        .optimize = optimize,
+    });
     const openzv = b.dependency("openzv", .{
         .target = target,
         .optimize = optimize,
@@ -32,6 +36,7 @@ pub fn build(b: *std.Build) void {
     const shared: []const SharedDeps = &[_]SharedDeps{
         .{ .import_name = "httpz", .module_name = "httpz", .dep = httpz },
         .{ .import_name = "openzv", .module_name = "openzv", .dep = openzv },
+        .{ .import_name = "pp", .module_name = "pp", .dep = pp },
     };
 
     const main_bin = b.addExecutable(.{

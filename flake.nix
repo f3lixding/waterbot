@@ -67,6 +67,7 @@
                   mkdir -p "$out/main_compute" "$out/openzv"
                   cp -R ${src}/. "$out/main_compute/"
                   cp -R ${pkgsDir + "/openzv"}/. "$out/openzv/"
+                  cp -R ${pkgsDir + "/perception_pipeline"}/. "$out/perception_pipeline/"
                 ''
               else
                 src;
@@ -109,10 +110,10 @@
             pname = name;
             version = "0.0.0";
 
-              src = effectiveSrc;
-              dontUnpack = name == "main_compute";
-              postPhases = [ "rewriteBundledRpathsPhase" ];
-              inherit nativeBuildInputs;
+            src = effectiveSrc;
+            dontUnpack = name == "main_compute";
+            postPhases = [ "rewriteBundledRpathsPhase" ];
+            inherit nativeBuildInputs;
             buildInputs = [
               targetPkgs.libgpiod
               targetPkgs.libv4l

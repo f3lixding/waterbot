@@ -9,6 +9,7 @@
             .hash = "httpz-0.0.0-PNVzrBtMBwAPcQx3mNEgat3Xbsynw-eIC9SmOX5M9XtP",
         },
         .openzv = .{ .path = "../openzv" },
+        .perception_pipeline = .{ .path = "../perception_pipeline" },
     },
     .paths = .{
         "build.zig",
