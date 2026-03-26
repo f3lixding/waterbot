@@ -7,6 +7,11 @@
 - [x] FFI for OpenCV (cpp to zig)
 - [x] Research on list of apis needed from opencv
 - [x] Refine list of FFI for openzv
-- [ ] Plug OpenCV into scaffolding done in step 2
+- [ ] Plug OpenCV into scaffolding done in step 2 
+    - We need to come up with an abstraction for the pipeline 
+    - And it would probably need to live in its own thread
+    - It would block on a waiter (similar to what is done in the channel implementation) 
+    - It would probably own a *Tx (we would probably need to change how it is passed to the dispatch thread as well)
+    - And it would send to mainLoop via this Tx 
 - [ ] Bottlecap targeting
 
