@@ -4,9 +4,9 @@ const Allocator = std.mem.Allocator;
 const main_compute = @import("main_compute");
 const Streamer = @import("Streamer.zig");
 const protocol = @import("protocol.zig");
-const Spsc = @import("channel.zig").Spsc(protocol.Command);
-const Tx = Spsc.Tx;
-const Rx = Spsc.Rx;
+const Mpsc = @import("channel.zig").Mpsc(protocol.Command);
+const Tx = Mpsc.Tx;
+const Rx = Mpsc.Rx;
 const logging = @import("logging.zig");
 const Gpio = @import("Gpio.zig");
 const openzv = @import("openzv");
@@ -153,7 +153,7 @@ pub fn main() !void {
     const server_thread = try std.Thread.spawn(.{}, spawnServer, .{ allocator, SOCKET_PATH });
     defer server_thread.join();
 
-    var spsc = try Spsc.init(allocator, 10);
+    var spsc = try Mpsc.init(allocator, 10);
     const channel = spsc.split();
     const tx = channel.tx;
     const rx = channel.rx;

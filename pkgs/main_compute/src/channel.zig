@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 /// This is NOT a lockfree implementation (which would use @cmpxchgStrong)
 /// We don't really need high throughput implementation here
 /// (though we might want to do one in the future just for the fun of it)
-pub fn Spsc(comptime T: type) type {
+pub fn Mpsc(comptime T: type) type {
     return struct {
         const Self = @This();
 
@@ -110,14 +110,14 @@ pub fn Spsc(comptime T: type) type {
 
 test "spsc sends across threads" {
     const testing = std.testing;
-    var channel = try Spsc(u32).init(testing.allocator, 8);
+    var channel = try Mpsc(u32).init(testing.allocator, 8);
     defer channel.deinit();
 
     const parts = channel.split();
     const N: u32 = 1000;
 
     const Producer = struct {
-        fn run(tx: Spsc(u32).Tx, count: u32) void {
+        fn run(tx: Mpsc(u32).Tx, count: u32) void {
             var i: u32 = 0;
             while (i < count) : (i += 1) {
                 tx.send(i) catch @panic("send failed");
@@ -142,13 +142,13 @@ test "spsc sends across threads" {
 
 test "spsc blocks until send from another thread" {
     const testing = std.testing;
-    var channel = try Spsc(u8).init(testing.allocator, 1);
+    var channel = try Mpsc(u8).init(testing.allocator, 1);
     defer channel.deinit();
 
     const parts = channel.split();
 
     const Producer = struct {
-        fn run(tx: Spsc(u8).Tx) void {
+        fn run(tx: Mpsc(u8).Tx) void {
             std.Thread.sleep(10 * std.time.ns_per_ms);
             tx.send(42) catch @panic("send failed");
             tx.close();
