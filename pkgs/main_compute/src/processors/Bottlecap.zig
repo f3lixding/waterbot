@@ -8,7 +8,7 @@ const logging = std.log.scoped(.bottlecap);
 const pp = @import("pp");
 const Frame = pp.Frame;
 const oz = @import("openzv");
-const PipelineCtx = @import("root").PipelineCtx;
+const PipelineCtx = @import("../main.zig").PipelineCtx;
 
 const Self = @This();
 // We will only support up to 1080p for now
@@ -75,4 +75,25 @@ pub fn process(ctx: *PipelineCtx, frame: Frame) !void {
     } else {
         ctx.offset_dir = .Right;
     }
+}
+
+test "test bottlecap pos" {
+    const allocator = std.testing.allocator;
+    // if test is failing because of no file found make sure to run it at package root!
+    const image = try std.fs.cwd().openFile("testdata/red_bottlecap_left.yuyv", .{});
+    defer image.close();
+
+    const data = try image.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    defer allocator.free(data);
+
+    const frame = Frame{
+        .data = data,
+        .width = MAX_WIDTH,
+        .height = MAX_HEIGHT,
+        .fmt = .YUYV,
+    };
+    var pp_ctx: PipelineCtx = undefined;
+
+    process(&pp_ctx, frame) catch unreachable;
+    std.debug.assert(pp_ctx.offset_dir == .Left);
 }
