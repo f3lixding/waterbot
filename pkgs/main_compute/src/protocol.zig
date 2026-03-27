@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const Command = union(enum) {
     direction: Direction,
+    compliant,
 
     pub fn stringify(self: Command, writer: *std.Io.Writer) !void {
         try std.json.Stringify.value(self, .{}, writer);
