@@ -82,6 +82,7 @@ test "envelope deserializes from json bytes" {
                 else => return error.UnexpectedDirection,
             }
         },
+        else => {},
     }
 }
 
