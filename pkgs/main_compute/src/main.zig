@@ -10,6 +10,11 @@ const Rx = Mpsc.Rx;
 const logging = @import("logging.zig");
 const Gpio = @import("Gpio.zig");
 const openzv = @import("openzv");
+const Pipeline = @import("processors/Pipeline.zig");
+const PerceptionSpec = @import("pp").PerceptionSpec;
+const PipelineStage = @import("pp").Pipeline.Stage;
+const BottleCapProcessor = @import("processors/Bottlecap.zig");
+const Processor = @import("pp").Processor;
 
 const SOCKET_PATH: []const u8 = "/tmp/main_compute.sock";
 
@@ -158,11 +163,29 @@ pub fn main() !void {
 
     var spsc = try Mpsc.init(allocator, 10);
     const channel = spsc.split();
-    const tx = channel.tx;
+    var tx = channel.tx;
     const rx = channel.rx;
 
     const dispatch_thread = try std.Thread.spawn(.{}, spawnDispatcher, .{ tx, streamer });
     defer dispatch_thread.join();
+
+    // TODO: move this to a more purposeful place
+    var bc = BottleCapProcessor{};
+    const bcp = Processor.initAsProcessor(PipelineCtx, BottleCapProcessor, &bc);
+    const stages = [_]PipelineStage{
+        .{
+            .perception = PerceptionSpec{ .Vision = .{} },
+            .processor = bcp,
+        },
+    };
+    var pipeline = try Pipeline.init(allocator, .{
+        .stages = stages[0..],
+    }, &tx);
+    defer pipeline.deinit();
+    try pipeline.orderUp(.UntilCompliant);
+
+    const cv_pipeline = try std.Thread.spawn(.{}, Pipeline.run, .{&pipeline});
+    defer cv_pipeline.join();
 
     try mainLoop(rx);
 }

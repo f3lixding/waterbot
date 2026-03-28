@@ -24,7 +24,7 @@ const MAX_OUTPUT_HSV_ARR_LEN: u32 = MAX_WIDTH * MAX_HEIGHT * 3;
 /// - threshold a known color
 /// - find the largest blob
 /// - report center/radius
-pub fn process(ctx: *PipelineCtx, frame: Frame) !void {
+pub fn process(_: *Self, ctx: *PipelineCtx, frame: Frame) !void {
     const data = frame.data;
     const width = frame.width;
     const height = frame.height;
@@ -94,6 +94,7 @@ test "test bottlecap pos" {
     };
     var pp_ctx: PipelineCtx = undefined;
 
-    process(&pp_ctx, frame) catch unreachable;
+    var processor = Self{};
+    processor.process(&pp_ctx, frame) catch unreachable;
     std.debug.assert(pp_ctx.offset_dir == .Left);
 }
