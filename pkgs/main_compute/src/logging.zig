@@ -17,8 +17,10 @@ const SIZE_UPPERBOUND: u64 = 52_428_000;
 
 var log_mutex: std.Thread.Mutex = .{};
 var log_file: ?std.fs.File = null;
+var log_level_set: std.log.Level = .info;
 
-pub fn init() !void {
+pub fn init(cap_level: std.log.Level) !void {
+    log_level_set = cap_level;
     if (log_file != null) return;
 
     log_file = try std.fs.createFileAbsolute(LOG_LOCATION, .{
@@ -52,6 +54,8 @@ pub fn logFn(
     comptime format: []const u8,
     args: anytype,
 ) void {
+    if (@intFromEnum(level) > @intFromEnum(log_level_set)) return;
+
     log_mutex.lock();
     defer log_mutex.unlock();
 

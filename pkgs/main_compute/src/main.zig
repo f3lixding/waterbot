@@ -157,10 +157,26 @@ pub fn main() !void {
     // there is) to use
     const allocator = std.heap.page_allocator;
 
+    const cap_level: std.log.Level = blk: {
+        const cap_level_str = std.process.getEnvVarOwned(allocator, "LOG_LEVEL") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => break :blk .info,
+            else => return err,
+        };
+        defer allocator.free(cap_level_str);
+
+        if (std.mem.eql(u8, cap_level_str, "debug")) break :blk .debug;
+        if (std.mem.eql(u8, cap_level_str, "info")) break :blk .info;
+        if (std.mem.eql(u8, cap_level_str, "warn")) break :blk .warn;
+        if (std.mem.eql(u8, cap_level_str, "err")) break :blk .err;
+        if (std.mem.eql(u8, cap_level_str, "error")) break :blk .err;
+
+        break :blk .info;
+    };
+
     var streamer = try preStart(allocator);
     defer streamer.deinit();
 
-    try logging.init();
+    try logging.init(cap_level);
     defer logging.deinit();
 
     // This is just here to ensure we can deploy for now
