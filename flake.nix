@@ -145,22 +145,51 @@
                 -Dgpiod-prefix=${targetPkgs.libgpiod} \
                 ${pkgs.lib.concatStringsSep " \\\n                " extraBuildFlags} \
                 -p "$out"
-            '';
 
-            # use scripts/elf-runtime-closure.sh to check for this
-            postFixup = ''
+              copy_libs() {
+                local pattern
+                local lib_path
+                for pattern in "$@"; do
+                  for lib_path in $pattern; do
+                    if [[ -e "$lib_path" ]]; then
+                      cp -a "$lib_path" "$out/lib/"
+                    fi
+                  done
+                done
+              }
+
               mkdir -p "$out/lib"
-              cp -a ${targetPkgs.libgpiod}/lib/libgpiod.so* "$out/lib/"
+              chmod u+w "$out"
+              chmod u+w "$out/lib"
+              copy_libs \
+                "${targetPkgs.libgpiod}/lib/libgpiod.so*"
               ${pkgs.lib.optionalString needsOpenzvToolchain ''
-                cp -a ${targetPkgs.opencv}/lib/libopencv*.so* "$out/lib/"
-                cp -a ${targetPkgs.ocl-icd}/lib/libOpenCL.so* "$out/lib/"
-                cp -a ${targetPkgs.openblas}/lib/libopenblas.so* "$out/lib/"
-                cp -a ${targetPkgs.openblas}/lib/libopenblasp-*.so "$out/lib/"
-                cp -a ${targetPkgs.zlib}/lib/libz.so* "$out/lib/"
-                cp -a ${targetPkgs.stdenv.cc.cc.lib}/lib/libstdc++.so* "$out/lib/"
-                cp -a ${targetPkgs.stdenv.cc.cc.lib}/lib/libgcc_s.so* "$out/lib/"
-                cp -a ${targetPkgs.stdenv.cc.cc.lib}/lib/libgomp.so* "$out/lib/"
-                cp -a ${targetPkgs.gfortran.cc.lib}/lib/libgfortran.so* "$out/lib/"
+                copy_libs \
+                  "${targetPkgs.opencv}/lib/libopencv*.so*" \
+                  "${targetPkgs.ocl-icd}/lib/libOpenCL.so*" \
+                  "${targetPkgs.openblas}/lib/libopenblas.so*" \
+                  "${targetPkgs.openblas}/lib/libopenblasp-*.so" \
+                  "${targetPkgs.libjpeg.out}/lib/libjpeg.so*" \
+                  "${targetPkgs.libpng}/lib/libpng*.so*" \
+                  "${targetPkgs.libtiff.out}/lib/libtiff*.so*" \
+                  "${targetPkgs.openjpeg}/lib/libopenjp2.so*" \
+                  "${targetPkgs.openexr.out}/lib/libOpenEXR*.so*" \
+                  "${targetPkgs.openexr.out}/lib/libIex*.so*" \
+                  "${targetPkgs.openexr.out}/lib/libIlmThread*.so*" \
+                  "${targetPkgs.imath.out}/lib/libImath*.so*" \
+                  "${targetPkgs.lerc.out}/lib/libLerc.so*" \
+                  "${targetPkgs.zstd.out}/lib/libzstd.so*" \
+                  "${targetPkgs.libdeflate}/lib/libdeflate.so*" \
+                  "${targetPkgs.xz.out}/lib/liblzma.so*" \
+                  "${targetPkgs.zlib}/lib/libz.so*" \
+                  "${targetPkgs.stdenv.cc.cc.lib}/lib/libstdc++.so*" \
+                  "${targetPkgs.stdenv.cc.cc.lib}/lib/libgcc_s.so*" \
+                  "${targetPkgs.stdenv.cc.cc.lib}/lib/libgomp.so*" \
+                  "${targetPkgs.gfortran.cc.lib}/lib/libgfortran.so*" \
+                  "${targetPkgs.libwebp}/lib/libwebp.so*" \
+                  "${targetPkgs.libwebp}/lib/libwebpmux.so*" \
+                  "${targetPkgs.libwebp}/lib/libwebpdemux.so*" \
+                  "${targetPkgs.libwebp}/lib/libsharpyuv.so*"
               ''}
             '';
 

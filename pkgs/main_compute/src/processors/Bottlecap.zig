@@ -56,13 +56,20 @@ pub fn process(_: *Self, ctx: *PipelineCtx, frame: Frame) !void {
     var mask: [MAX_MASK_LEN]u8 = undefined;
     const min_area: f32 = 50.0;
 
-    try oz.yuyvToBgr(data, width, height, output_bgr[0..exp_output_len]);
-    try oz.bgrToHsv(&output_bgr, width, height, output_hsv[0..exp_output_len]);
-    try oz.hsvInRange(&output_hsv, width, height, range, mask[0..mask_len]);
+    const bgr = output_bgr[0..exp_output_len];
+    const hsv = output_hsv[0..exp_output_len];
+    const mask_view = mask[0..mask_len];
 
-    const circle = oz.findLargestBlobCircle(&mask, width, height, min_area) catch {
-        ctx.offset_dir = .Center;
-        return;
+    try oz.yuyvToBgr(data, width, height, bgr);
+    try oz.bgrToHsv(bgr, width, height, hsv);
+    try oz.hsvInRange(hsv, width, height, range, mask_view);
+
+    const circle = oz.findLargestBlobCircle(mask_view, width, height, min_area) catch |err| switch (err) {
+        error.NoBlobFound => {
+            ctx.offset_dir = .NotFound;
+            return;
+        },
+        else => return err,
     };
     const center_x = circle.center_x;
     const min_x: f32 = @floatFromInt(width / 3);

@@ -15,6 +15,7 @@ const PerceptionSpec = @import("pp").PerceptionSpec;
 const PipelineStage = @import("pp").Pipeline.Stage;
 const BottleCapProcessor = @import("processors/Bottlecap.zig");
 const Processor = @import("pp").Processor;
+pub const CvOrderTx = Pipeline.OrderTx;
 
 const SOCKET_PATH: []const u8 = "/tmp/main_compute.sock";
 
@@ -29,6 +30,7 @@ pub const PipelineCtx = struct {
         Left,
         Right,
         Center,
+        NotFound,
     };
     offset_dir: Dir,
 };
@@ -44,9 +46,10 @@ fn preStart(allocator: Allocator) !Streamer {
 fn spawnServer(
     allocator: Allocator,
     socket_path: []const u8,
+    cv_order_tx: *CvOrderTx, // This is for testing only. It dispatches order to the cv pipeline via the UI
 ) !void {
     const Server = @import("Server.zig");
-    try Server.run(allocator, socket_path);
+    try Server.run(allocator, socket_path, cv_order_tx);
 }
 
 fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
@@ -64,6 +67,7 @@ fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
 
 fn mainLoop(rx: Rx) !void {
     const log = std.log.scoped(.main_loop);
+    log.info("main loop initialized", .{});
 
     const Chip = Gpio.Chip;
     const Bridge = Gpio.Bridge;
@@ -93,15 +97,22 @@ fn mainLoop(rx: Rx) !void {
     // both sets are in the same /dev we only need one path
     const gpio_path = "/dev/gpiochip0";
 
+    log.info("opening gpio chip: {s}", .{gpio_path});
     const chip = try Chip.open(gpio_path);
     defer chip.close();
+    log.info("opened gpio chip", .{});
 
+    log.info("initializing motor A bridge", .{});
     var bridge_a = try Bridge.init(chip, motor_a_bridge_pins, "Motor A");
+    log.info("motor A bridge ready", .{});
+    log.info("initializing motor B bridge", .{});
     var bridge_b = try Bridge.init(chip, motor_b_bridge_pins, "Motor B");
+    log.info("motor B bridge ready", .{});
     defer bridge_a.deinit();
     defer bridge_b.deinit();
 
     while (true) {
+        log.info("waiting for command", .{});
         const received = rx.recv() catch unreachable;
         log.info("received through spsc: {any}\n", .{received});
 
@@ -156,18 +167,17 @@ pub fn main() !void {
     // TODO: remove this
     const version = openzv.opencvVersionMajor();
     const log = std.log.scoped(.main_entry);
-    log.info("Running OpenCV version: {d}\n", .{version});
+    log.info("Running OpenCV version: {d}", .{version});
 
-    const server_thread = try std.Thread.spawn(.{}, spawnServer, .{ allocator, SOCKET_PATH });
-    defer server_thread.join();
-
-    var spsc = try Mpsc.init(allocator, 10);
-    const channel = spsc.split();
+    var mpsc = try Mpsc.init(allocator, 10);
+    const channel = mpsc.split();
     var tx = channel.tx;
     const rx = channel.rx;
 
-    const dispatch_thread = try std.Thread.spawn(.{}, spawnDispatcher, .{ tx, streamer });
-    defer dispatch_thread.join();
+    const dispatch_thread = std.Thread.spawn(.{}, spawnDispatcher, .{ tx, streamer }) catch |e| {
+        log.err("Dispatch thread failed to spawn: {any}", .{e});
+        return e;
+    };
 
     // TODO: move this to a more purposeful place
     var bc = BottleCapProcessor{};
@@ -178,15 +188,30 @@ pub fn main() !void {
             .processor = bcp,
         },
     };
-    var pipeline = try Pipeline.init(allocator, .{
+    var pipeline = Pipeline.init(allocator, .{
         .stages = stages[0..],
-    }, &tx);
+    }, &tx) catch |e| {
+        log.err("Error initializing pipeline: {any}", .{e});
+        return e;
+    };
+    const order_tx = &pipeline.order_tx;
     defer pipeline.deinit();
-    try pipeline.orderUp(.UntilCompliant);
 
-    const cv_pipeline = try std.Thread.spawn(.{}, Pipeline.run, .{&pipeline});
+    const server_thread = std.Thread.spawn(.{}, spawnServer, .{ allocator, SOCKET_PATH, order_tx }) catch |e| {
+        log.err("Server thread failed to spawn: {any}", .{e});
+        return e;
+    };
+
+    const cv_pipeline = std.Thread.spawn(.{}, Pipeline.run, .{&pipeline}) catch |e| {
+        log.err("CV pipeline thread failed to spawn: {any}", .{e});
+        return e;
+    };
+
     defer cv_pipeline.join();
+    defer server_thread.join();
+    defer dispatch_thread.join();
 
+    log.info("entering main loop", .{});
     try mainLoop(rx);
 }
 

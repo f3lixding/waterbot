@@ -5,9 +5,13 @@ const protocol = @import("protocol.zig");
 const Allocator = std.mem.Allocator;
 const PORT: u16 = 8888;
 const websocket = httpz.websocket;
+const CvOrderTx = @import("main.zig").CvOrderTx;
+
+const logging = std.log.scoped(.server);
 
 const Handler = struct {
     socket_path: []const u8,
+    order_tx: ?*CvOrderTx,
 
     pub const WebsocketHandler = Client;
 };
@@ -49,8 +53,11 @@ const Client = struct {
     }
 };
 
-pub fn run(allocator: Allocator, socket_path: []const u8) !void {
-    var handler = Handler{ .socket_path = socket_path };
+pub fn run(allocator: Allocator, socket_path: []const u8, order_tx: ?*CvOrderTx) !void {
+    var handler = Handler{
+        .socket_path = socket_path,
+        .order_tx = order_tx,
+    };
 
     var server = try httpz.Server(*Handler).init(allocator, .{
         .address = .all(PORT),
@@ -61,8 +68,10 @@ pub fn run(allocator: Allocator, socket_path: []const u8) !void {
     var router = try server.router(.{});
     router.get("/home", serveHome, .{});
     router.get("/ws", serveWebsocket, .{});
+    router.get("/cv", serveCvOrder, .{});
 
-    std.debug.print("listening http://0.0.0.0:{d}/\n", .{PORT});
+    logging.info("Serving at port: {d}", .{PORT});
+
     try server.listen();
 }
 
@@ -128,6 +137,9 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\        <button id="stop" disabled>stop</button>
         \\        <button id="right" disabled>right</button>
         \\      </div>
+        \\      <div class="controls">
+        \\        <button id="cv-order">run cv order</button>
+        \\      </div>
         \\      <p id="status">Connecting...</p>
         \\    </main>
         \\    <script>
@@ -135,6 +147,7 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\      const left = document.getElementById("left");
         \\      const right = document.getElementById("right");
         \\      const stop = document.getElementById("stop");
+        \\      const cvOrder = document.getElementById("cv-order");
         \\      const buttons = [left, stop, right];
         \\
         \\      const setConnected = (connected) => {
@@ -169,6 +182,21 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\        status.textContent = "Websocket error";
         \\      });
         \\
+        \\      cvOrder.addEventListener("click", async () => {
+        \\        cvOrder.disabled = true;
+        \\        status.textContent = "Queueing cv order...";
+        \\
+        \\        try {
+        \\          const response = await fetch("/cv");
+        \\          const text = await response.text();
+        \\          status.textContent = text;
+        \\        } catch (_) {
+        \\          status.textContent = "Failed to queue cv order";
+        \\        } finally {
+        \\          cvOrder.disabled = false;
+        \\        }
+        \\      });
+        \\
         \\      left.addEventListener("click", () => ws.send(buildCommand("left")));
         \\      stop.addEventListener("click", () => ws.send(buildCommand("stop")));
         \\      right.addEventListener("click", () => ws.send(buildCommand("right")));
@@ -187,6 +215,39 @@ fn serveWebsocket(handler: *Handler, req: *httpz.Request, res: *httpz.Response) 
     }
 }
 
+fn serveCvOrder(handler: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = req;
+
+    if (handler.order_tx) |tx| {
+        tx.trySend(.UntilCompliant) catch |err| {
+            switch (err) {
+                error.WouldBlock => {
+                    res.status = 429;
+                    res.content_type = .TEXT;
+                    res.body = "cv order queue is full";
+                    return;
+                },
+                error.Closed => {
+                    res.status = 503;
+                    res.content_type = .TEXT;
+                    res.body = "cv pipeline is closed";
+                    return;
+                },
+                else => return err,
+            }
+        };
+        res.status = 202;
+        res.content_type = .TEXT;
+        res.body = "queued cv order";
+        return;
+    }
+
+    logging.info("Received pipeline request without order tx", .{});
+    res.status = 503;
+    res.content_type = .TEXT;
+    res.body = "cv pipeline unavailable";
+}
+
 fn connectBackend(socket_path: []const u8) !std.net.Stream {
     const fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
     errdefer std.posix.close(fd);
@@ -200,5 +261,5 @@ fn connectBackend(socket_path: []const u8) !std.net.Stream {
 pub fn main() void {
     const SOCKET_PATH = "/tmp/main_compute.sock";
     const allocator = std.heap.page_allocator;
-    run(allocator, SOCKET_PATH) catch unreachable;
+    run(allocator, SOCKET_PATH, null) catch unreachable;
 }

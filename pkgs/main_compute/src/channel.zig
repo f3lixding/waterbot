@@ -50,6 +50,20 @@ pub fn Mpsc(comptime T: type) type {
         pub const Tx = struct {
             state: *State,
 
+            pub fn trySend(self: *const Tx, item: T) !void {
+                const state = self.state;
+                state.mutex.lock();
+                defer state.mutex.unlock();
+
+                if (state.closed) return error.Closed;
+                if (state.len == state.capacity) return error.WouldBlock;
+
+                state.buffer[state.tail] = item;
+                state.tail = (state.tail + 1) % state.capacity;
+                state.len += 1;
+                state.not_empty.signal();
+            }
+
             pub fn send(self: *const Tx, item: T) !void {
                 const state = self.state;
                 state.mutex.lock();
@@ -161,4 +175,15 @@ test "spsc blocks until send from another thread" {
     const value = try parts.rx.recv();
     try testing.expectEqual(@as(u8, 42), value);
     try testing.expectError(error.Closed, parts.rx.recv());
+}
+
+test "trySend returns WouldBlock when full" {
+    const testing = std.testing;
+    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    defer channel.deinit();
+
+    const parts = channel.split();
+    try parts.tx.trySend(7);
+    try testing.expectError(error.WouldBlock, parts.tx.trySend(8));
+    try testing.expectEqual(@as(u8, 7), try parts.rx.recv());
 }

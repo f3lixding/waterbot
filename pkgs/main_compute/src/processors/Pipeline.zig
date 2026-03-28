@@ -6,7 +6,7 @@ const Self = @This();
 const EgressTx = @import("../main.zig").Tx;
 const Mpsc = @import("../channel.zig").Mpsc(OrderDetail);
 const OrderRx = Mpsc.Rx;
-const OrderTx = Mpsc.Tx;
+pub const OrderTx = Mpsc.Tx;
 const Pipeline = @import("pp").Pipeline;
 const PipelineCtx = @import("../main.zig").PipelineCtx;
 const PipelineConfig = @import("pp").Pipeline.PipelineConfig;
@@ -66,17 +66,22 @@ pub fn run(self: *Self) !void {
             }
         }
 
+        logging.info("Serving cv order", .{});
+
         var ctx: PipelineCtx = undefined;
         pipeline.tick(@ptrCast(&ctx)) catch |e| {
             logging.err("Pipeline has failed to tick: {any}", .{e});
-            ctx.offset_dir = .Center;
+            ctx.offset_dir = .NotFound;
         };
 
         const command = commandForOffset(ctx.offset_dir);
+        logging.info("Pipeline produced command: {any}", .{command});
+
         self.egress_tx.send(command) catch |e| {
             logging.err("Pipeline has failed to send result: {any}", .{e});
         };
-        if (ctx.offset_dir == .Center) {
+        logging.info("Pipeline command sent", .{});
+        if (ctx.offset_dir == .Center or ctx.offset_dir == .NotFound) {
             should_run = false;
         }
     }
@@ -91,6 +96,7 @@ fn commandForOffset(dir: PipelineCtx.Dir) Command {
         .Center => .compliant,
         .Left => .{ .direction = .{ .left = .{ .speed = 20 } } },
         .Right => .{ .direction = .{ .right = .{ .speed = 20 } } },
+        .NotFound => .{ .direction = .stop },
     };
 }
 
@@ -112,6 +118,18 @@ test "commandForOffset maps center to compliant" {
 
     switch (command) {
         .compliant => {},
+        else => return error.UnexpectedCommand,
+    }
+}
+
+test "commandForOffset maps not found to stop" {
+    const command = commandForOffset(.NotFound);
+
+    switch (command) {
+        .direction => |dir| switch (dir) {
+            .stop => {},
+            else => return error.UnexpectedDirection,
+        },
         else => return error.UnexpectedCommand,
     }
 }
