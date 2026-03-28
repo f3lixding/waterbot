@@ -1,4 +1,4 @@
-# Current TODO
+# TODO
 
 - [x] Interface with the web cam from v4l (get data from the webcam via the api)
 - [x] Post stream frame bytes processing
