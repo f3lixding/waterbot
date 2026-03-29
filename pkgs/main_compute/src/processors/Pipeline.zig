@@ -14,6 +14,7 @@ const Command = @import("../protocol.zig").Command;
 
 pub const OrderDetail = enum {
     UntilCompliant,
+    Stop,
 };
 
 order_tx: OrderTx,
@@ -64,6 +65,14 @@ pub fn run(self: *Self) !void {
             if (order_detail == .UntilCompliant) {
                 should_run = true;
             }
+        } else if (self.order_rx.tryRecv()) |order| {
+            if (order == .Stop) {
+                should_run = false;
+                continue;
+            }
+        } else |err| switch (err) {
+            error.WouldBlock => {},
+            else => return err,
         }
 
         logging.info("Serving cv order", .{});
@@ -81,7 +90,7 @@ pub fn run(self: *Self) !void {
             logging.err("Pipeline has failed to send result: {any}", .{e});
         };
         logging.info("Pipeline command sent", .{});
-        if (ctx.offset_dir == .Center or ctx.offset_dir == .NotFound) {
+        if (ctx.offset_dir == .Center) {
             should_run = false;
         }
     }

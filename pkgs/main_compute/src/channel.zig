@@ -29,6 +29,21 @@ pub fn Mpsc(comptime T: type) type {
         pub const Rx = struct {
             state: *State,
 
+            pub fn tryRecv(self: *const Rx) !T {
+                const state = self.state;
+                state.mutex.lock();
+                defer state.mutex.unlock();
+
+                if (state.closed) return error.Closed;
+                if (state.len == 0) return error.WouldBlock;
+
+                const item = state.buffer[state.head];
+                state.head = (state.head + 1) % state.capacity;
+                state.len -= 1;
+                state.not_full.signal();
+                return item;
+            }
+
             pub fn recv(self: *const Rx) !T {
                 const state = self.state;
                 state.mutex.lock();

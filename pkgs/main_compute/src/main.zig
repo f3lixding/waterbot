@@ -237,6 +237,4 @@ test {
     _ = @import("Gpio.zig");
     _ = @import("processors/Bottlecap.zig");
     _ = @import("processors/Pipeline.zig");
-    const version = openzv.opencvVersionMajor();
-    std.debug.print("version: {d}\n", .{version});
 }
