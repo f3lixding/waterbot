@@ -69,6 +69,7 @@ pub fn run(allocator: Allocator, socket_path: []const u8, order_tx: ?*CvOrderTx)
     router.get("/home", serveHome, .{});
     router.get("/ws", serveWebsocket, .{});
     router.get("/cv", serveCvOrder, .{});
+    router.get("/cv/stop", serveCvStopOrder, .{});
 
     logging.info("Serving at port: {d}", .{PORT});
 
@@ -139,6 +140,7 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\      </div>
         \\      <div class="controls">
         \\        <button id="cv-order">run cv order</button>
+        \\        <button id="cv-stop">stop cv order</button>
         \\      </div>
         \\      <p id="status">Connecting...</p>
         \\    </main>
@@ -148,6 +150,7 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\      const right = document.getElementById("right");
         \\      const stop = document.getElementById("stop");
         \\      const cvOrder = document.getElementById("cv-order");
+        \\      const cvStop = document.getElementById("cv-stop");
         \\      const buttons = [left, stop, right];
         \\
         \\      const setConnected = (connected) => {
@@ -197,6 +200,21 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
         \\        }
         \\      });
         \\
+        \\      cvStop.addEventListener("click", async () => {
+        \\        cvStop.disabled = true;
+        \\        status.textContent = "Queueing cv stop order...";
+        \\
+        \\        try {
+        \\          const response = await fetch("/cv/stop");
+        \\          const text = await response.text();
+        \\          status.textContent = text;
+        \\        } catch (_) {
+        \\          status.textContent = "Failed to queue cv stop order";
+        \\        } finally {
+        \\          cvStop.disabled = false;
+        \\        }
+        \\      });
+        \\
         \\      left.addEventListener("click", () => ws.send(buildCommand("left")));
         \\      stop.addEventListener("click", () => ws.send(buildCommand("stop")));
         \\      right.addEventListener("click", () => ws.send(buildCommand("right")));
@@ -243,6 +261,39 @@ fn serveCvOrder(handler: *Handler, req: *httpz.Request, res: *httpz.Response) !v
     }
 
     logging.info("Received pipeline request without order tx", .{});
+    res.status = 503;
+    res.content_type = .TEXT;
+    res.body = "cv pipeline unavailable";
+}
+
+fn serveCvStopOrder(handler: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
+    _ = req;
+
+    if (handler.order_tx) |tx| {
+        tx.trySend(.Stop) catch |err| {
+            switch (err) {
+                error.WouldBlock => {
+                    res.status = 429;
+                    res.content_type = .TEXT;
+                    res.body = "cv order queue is full";
+                    return;
+                },
+                error.Closed => {
+                    res.status = 503;
+                    res.content_type = .TEXT;
+                    res.body = "cv pipeline is closed";
+                    return;
+                },
+                else => return err,
+            }
+        };
+        res.status = 202;
+        res.content_type = .TEXT;
+        res.body = "queued cv stop order";
+        return;
+    }
+
+    logging.info("Received pipeline stop request without order tx", .{});
     res.status = 503;
     res.content_type = .TEXT;
     res.body = "cv pipeline unavailable";
