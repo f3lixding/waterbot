@@ -114,7 +114,7 @@ fn mainLoop(rx: Rx) !void {
     while (true) {
         log.info("waiting for command", .{});
         const received = rx.recv() catch unreachable;
-        log.info("received through spsc: {any}\n", .{received});
+        log.info("received through spsc: {any}", .{received});
 
         switch (received) {
             // For now we'll mimic direction
@@ -196,7 +196,8 @@ pub fn main() !void {
     };
 
     // TODO: move this to a more purposeful place
-    var bc = BottleCapProcessor{};
+    var bc = BottleCapProcessor.init(allocator);
+    defer bc.deinit();
     const bcp = Processor.initAsProcessor(PipelineCtx, BottleCapProcessor, &bc);
     const stages = [_]PipelineStage{
         .{

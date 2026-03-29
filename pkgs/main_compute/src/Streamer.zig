@@ -85,7 +85,7 @@ fn handleConnection(
         } orelse break;
 
         on_message(allocator, ctx, msg) catch |e| {
-            log.err("Error deserializing incoming message: {any}\n", .{e});
+            log.err("Error deserializing incoming message: {any}", .{e});
         };
     }
 
