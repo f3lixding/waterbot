@@ -29,6 +29,54 @@ pub fn Mpsc(comptime T: type) type {
         pub const Rx = struct {
             state: *State,
 
+            pub fn recvWithTimeout(self: *const Rx, wait_until: std.time.Instant) !T {
+                const state = self.state;
+                var lock_acquired: bool = false;
+
+                defer if (lock_acquired) {
+                    state.mutex.unlock();
+                };
+
+                while (!lock_acquired) {
+                    if (state.mutex.tryLock()) {
+                        lock_acquired = true;
+                        break;
+                    }
+
+                    const now = try std.time.Instant.now();
+                    switch (now.order(wait_until)) {
+                        .gt => return error.Timeout,
+                        else => {},
+                    }
+
+                    const time_left = wait_until.since(now);
+                    if (time_left == 0) return error.Timeout;
+
+                    std.Thread.sleep(@min(time_left, 1 * std.time.ns_per_ms));
+                }
+
+                while (state.len == 0) {
+                    if (state.closed) return error.Closed;
+
+                    const now = try std.time.Instant.now();
+                    switch (now.order(wait_until)) {
+                        .gt => return error.Timeout,
+                        else => {},
+                    }
+
+                    const time_left = wait_until.since(now);
+                    state.not_empty.timedWait(&state.mutex, time_left) catch |e| switch (e) {
+                        error.Timeout => return error.Timeout,
+                    };
+                }
+
+                const item = state.buffer[state.head];
+                state.head = (state.head + 1) % state.capacity;
+                state.len -= 1;
+                state.not_full.signal();
+                return item;
+            }
+
             pub fn tryRecv(self: *const Rx) !T {
                 const state = self.state;
                 state.mutex.lock();
@@ -137,6 +185,23 @@ pub fn Mpsc(comptime T: type) type {
     };
 }
 
+fn instantAfter(timeout_ns: u64) !std.time.Instant {
+    var now = try std.time.Instant.now();
+
+    if (@TypeOf(now.timestamp) == u64) {
+        now.timestamp += timeout_ns;
+        return now;
+    }
+
+    const extra_sec = timeout_ns / std.time.ns_per_s;
+    const extra_nsec = timeout_ns % std.time.ns_per_s;
+    const nsec_total = @as(u64, @intCast(now.timestamp.nsec)) + extra_nsec;
+
+    now.timestamp.sec += @intCast(extra_sec + (nsec_total / std.time.ns_per_s));
+    now.timestamp.nsec = @intCast(nsec_total % std.time.ns_per_s);
+    return now;
+}
+
 test "spsc sends across threads" {
     const testing = std.testing;
     var channel = try Mpsc(u32).init(testing.allocator, 8);
@@ -201,4 +266,58 @@ test "trySend returns WouldBlock when full" {
     try parts.tx.trySend(7);
     try testing.expectError(error.WouldBlock, parts.tx.trySend(8));
     try testing.expectEqual(@as(u8, 7), try parts.rx.recv());
+}
+
+test "recvWithTimeout returns buffered item immediately" {
+    const testing = std.testing;
+    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    defer channel.deinit();
+
+    const parts = channel.split();
+    try parts.tx.trySend(42);
+
+    try testing.expectEqual(@as(u8, 42), try parts.rx.recvWithTimeout(try std.time.Instant.now()));
+}
+
+test "recvWithTimeout drains buffered item after close" {
+    const testing = std.testing;
+    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    defer channel.deinit();
+
+    const parts = channel.split();
+    try parts.tx.trySend(9);
+    parts.tx.close();
+
+    try testing.expectEqual(@as(u8, 9), try parts.rx.recvWithTimeout(try std.time.Instant.now()));
+    try testing.expectError(error.Closed, parts.rx.recvWithTimeout(try instantAfter(10 * std.time.ns_per_ms)));
+}
+
+test "recvWithTimeout returns closed when channel closes while empty" {
+    const testing = std.testing;
+    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    defer channel.deinit();
+
+    const parts = channel.split();
+
+    const Closer = struct {
+        fn run(tx: Mpsc(u8).Tx) void {
+            std.Thread.sleep(10 * std.time.ns_per_ms);
+            tx.close();
+        }
+    };
+
+    const thread = try std.Thread.spawn(.{}, Closer.run, .{parts.tx});
+    defer thread.join();
+
+    try testing.expectError(error.Closed, parts.rx.recvWithTimeout(try instantAfter(100 * std.time.ns_per_ms)));
+}
+
+test "recvWithTimeout times out when no item arrives" {
+    const testing = std.testing;
+    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    defer channel.deinit();
+
+    const parts = channel.split();
+
+    try testing.expectError(error.Timeout, parts.rx.recvWithTimeout(try instantAfter(20 * std.time.ns_per_ms)));
 }
