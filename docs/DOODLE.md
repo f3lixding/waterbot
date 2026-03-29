@@ -5,6 +5,7 @@ Related reading:
 - [GPIO concepts](./gpio.md)
 - [Hardware connection guide](./hardware-connection-guide.md)
 - [USB camera streaming on Linux](./usb-camera-streaming.md)
+- [Control architecture](./control-architecture.md)
 
 ## Abstract
 
