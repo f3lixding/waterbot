@@ -65,7 +65,20 @@ pub fn logFn(
     var file_writer = file.writerStreaming(&buf);
     const writer = &file_writer.interface;
 
-    writer.print("[{s}] [{s}] ", .{
+    const now = std.time.epoch.EpochSeconds{
+        .secs = @intCast(std.time.timestamp()),
+    };
+    const day_seconds = now.getDaySeconds();
+    const year_day = now.getEpochDay().calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+
+    writer.print("[{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC] [{s}] [{s}] ", .{
+        year_day.year,
+        month_day.month.numeric(),
+        month_day.day_index + 1,
+        day_seconds.getHoursIntoDay(),
+        day_seconds.getMinutesIntoHour(),
+        day_seconds.getSecondsIntoMinute(),
         @tagName(level),
         @tagName(scope),
     }) catch return;
