@@ -6,6 +6,7 @@ Related reading:
 - [Hardware connection guide](./hardware-connection-guide.md)
 - [USB camera streaming on Linux](./usb-camera-streaming.md)
 - [Control architecture](./control-architecture.md)
+- [ROS adoption and Zig integration](./ros-adoption-and-integration.md)
 
 ## Abstract
 
