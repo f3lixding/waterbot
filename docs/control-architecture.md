@@ -65,7 +65,7 @@ Purpose:
 
 Notes:
 
-- This should be the narrow responsibility of `mainLoop`
+- This should be the narrow responsibility of `commandActuatorLoop`
 - This loop should stay simple and deterministic
 
 ### Perception loop
@@ -176,7 +176,7 @@ This thread should run at a fixed rate.
 
 ### Perception thread
 
-Responsibilities:
+esponsibilities:
 
 - Camera capture
 - CV processing
@@ -263,21 +263,21 @@ The system should look roughly like this:
 
 `heading or navigation controller -> motor setpoints`
 
-`mainLoop -> GPIO or PWM output`
+`commandActuatorLoop -> GPIO or PWM output`
 
 This keeps the low-level motor path clean while allowing higher-level logic to
-grow without overloading `mainLoop`.
+grow without overloading `commandActuatorLoop`.
 
-## What `mainLoop` should be
+## What `commandActuatorLoop` should be
 
-`mainLoop` should remain close to hardware:
+`commandActuatorLoop` should remain close to hardware:
 
 - Apply motor outputs
 - Brake safely
 - Enforce timeouts
 - Accept small correction inputs from controllers
 
-`mainLoop` should not become the place for:
+`commandActuatorLoop` should not become the place for:
 
 - Plant identity logic
 - CV policy
@@ -290,7 +290,7 @@ Those belong above the actuator layer.
 
 Given the current state of the project, the next practical order is:
 
-1. Keep `mainLoop` as a low-level actuator loop
+1. Keep `commandActuatorLoop` as a low-level actuator loop
 2. Add IMU-based heading estimation
 3. Add a heading controller
 4. Make perception publish observations instead of directly driving behavior

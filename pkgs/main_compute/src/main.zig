@@ -65,9 +65,27 @@ fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
     try streamer.serve(&tx_ctx, onMessage);
 }
 
-fn mainLoop(rx: Rx) !void {
+// TODO: rewrite this loop with the following structure:
+//   while (true) {
+//       while (rx.tryRecv()) |cmd| {
+//           updateDesiredState(cmd);
+//       } else |err| switch (err) {
+//           error.WouldBlock => {},
+//           else => return err,
+//       }
+//
+//       readLatestSensors();
+//       updateEstimator();
+//       runController();
+//       applyMotorOutputs();
+//       enforceSafetyTimeouts();
+//       sleepUntilNextTick();
+//   }
+//   This would effectively turn this into a
+//   [super loop](https://stackoverflow.com/questions/44429456/what-is-super-loop-in-embedded-c-programming-language)
+fn commandActuatorSuperLoop(rx: Rx) !void {
     const log = std.log.scoped(.main_loop);
-    log.info("main loop initialized", .{});
+    log.info("command actuator loop initialized", .{});
 
     const Chip = Gpio.Chip;
     const Bridge = Gpio.Bridge;
@@ -150,8 +168,8 @@ fn mainLoop(rx: Rx) !void {
 ///
 /// - Spawn the dispatch thread
 ///
-/// - Initiate the main loop routine (this is the brain that actually affects the
-/// GPIOs)
+/// - Initiate the command actuator loop routine (this is the brain that
+/// actually affects the GPIOs)
 pub fn main() !void {
     // TODO: learn about different allocator types and choose a better (if
     // there is) to use
@@ -228,8 +246,8 @@ pub fn main() !void {
     defer server_thread.join();
     defer dispatch_thread.join();
 
-    log.info("entering main loop", .{});
-    try mainLoop(rx);
+    log.info("entering command actuator loop", .{});
+    try commandActuatorSuperLoop(rx);
 }
 
 test {
