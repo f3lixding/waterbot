@@ -9,15 +9,64 @@ code.
 ROS, or Robot Operating System, is not an operating system in the normal sense.
 It is a middleware and tooling ecosystem for robot software.
 
-It gives you standard building blocks for:
+It gives you a standard vocabulary and runtime model for structuring robot
+software.
 
-- processes called `nodes`
-- communication between nodes via topics, services, and actions
-- hardware abstraction
-- coordinate transforms
-- logging and visualization
-- simulation
-- packages for common robotics problems like SLAM, localization, and navigation
+The main building blocks are:
+
+- `packages`: the unit of organization and distribution. A package usually
+  contains source code, configuration, launch files, and sometimes URDF models
+  or calibration data.
+- `nodes`: long-running processes, or components within a process, that do one
+  job. A camera driver, IMU driver, localization module, or motor controller
+  would each typically be a node.
+- `messages`: typed data structures passed between nodes. Examples include
+  sensor readings, velocity commands, odometry, and maps.
+- `topics`: named pub/sub channels used for streaming data. A camera node might
+  publish images on one topic while a localization node subscribes to IMU and
+  odometry topics.
+- `services`: synchronous request/response APIs used for short operations. They
+  are appropriate for commands like "clear costmap" or "save map".
+- `actions`: goal-oriented interfaces for longer-running tasks with feedback and
+  cancellation. Navigation is a typical action because it may take several
+  seconds, produce progress updates, and may need to be canceled.
+- `parameters`: configuration values attached to nodes. They are used for things
+  like PID gains, topic names, frame IDs, device paths, and thresholds.
+- `tf2`: the transform system that tracks coordinate frames such as `map`,
+  `odom`, `base_link`, `camera_link`, and `laser`. This is how the rest of the
+  stack understands where data is located relative to the robot and the world.
+- `launch files`: startup descriptions that wire together multiple nodes,
+  parameters, remappings, and runtime options into one runnable system.
+- `tools`: visualization, recording, and debugging tools such as RViz, rosbag2,
+  and command-line inspectors.
+
+These pieces relate to each other in a specific way:
+
+- a `package` contains one or more `nodes`
+- a `node` publishes or subscribes to `topics`
+- the data on a `topic` is a typed `message`
+- a `node` may also expose a `service` for quick request/response operations
+- a `node` may expose an `action` when the operation is long-running and needs
+  feedback or cancellation
+- `parameters` configure how the node behaves
+- `tf2` provides the shared frame relationships so that messages from different
+  nodes can be interpreted in the same coordinate system
+- a `launch file` starts the relevant nodes with the required parameters and
+  topic remappings
+
+So instead of writing one giant robot program, you usually compose a robot as a
+graph of nodes. For example:
+
+- a camera driver node publishes image messages
+- an IMU node publishes inertial messages
+- a wheel odometry node publishes odometry
+- a localization node subscribes to IMU and odometry, then publishes pose
+- a navigation node sends velocity commands
+- a motor controller node subscribes to those commands and drives the hardware
+
+Those nodes are not just passing bytes around randomly. They are connected by
+typed messages, coordinated by topic/service/action semantics, and anchored by a
+shared transform tree.
 
 So instead of writing one giant robot program, you usually compose a robot out
 of nodes like:
