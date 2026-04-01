@@ -356,77 +356,125 @@ That is the key idea:
 
 ## ROS side example
 
-The bridge node can be very small. Python is fine for this.
+The bridge node can be very small. A separate `C++` ROS node built with
+`rclcpp` is a good fit here if you do not want to introduce a garbage-collected
+runtime into the stack.
 
-Example `rclpy` bridge:
+Example `rclcpp` bridge:
 
-```python
-import json
-import socket
+```cpp
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
-import rclpy
-from geometry_msgs.msg import Twist
-from nav_msgs.msg import Odometry
-from rclpy.node import Node
+#include <cerrno>
+#include <cstring>
+#include <string>
 
+#include <geometry_msgs/msg/twist.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <nlohmann/json.hpp>
+#include <rclcpp/rclcpp.hpp>
 
-class WaterbotBridge(Node):
-    def __init__(self):
-        super().__init__("waterbot_bridge")
+class WaterbotBridge : public rclcpp::Node {
+public:
+  WaterbotBridge() : Node("waterbot_bridge") {
+    sock_fd_ = connect_unix_socket("/tmp/main_compute.sock");
+    if (sock_fd_ < 0) {
+      throw std::runtime_error("failed to connect to Zig backend");
+    }
 
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.connect("/tmp/main_compute.sock")
-        self.sock.setblocking(False)
-        self.rx_buf = b""
+    cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
+        "/cmd_vel", 10,
+        std::bind(&WaterbotBridge::on_cmd_vel, this, std::placeholders::_1));
 
-        self.create_subscription(Twist, "/cmd_vel", self.on_cmd_vel, 10)
-        self.odom_pub = self.create_publisher(Odometry, "/waterbot/odom", 10)
-        self.create_timer(0.02, self.poll_telemetry)
+    odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/waterbot/odom", 10);
 
-    def on_cmd_vel(self, msg: Twist):
-        payload = {
-            "velocity": {
-                "linear_mps": msg.linear.x,
-                "angular_rad_s": msg.angular.z,
-                "valid_for_ms": 100,
-            }
-        }
-        self.sock.sendall((json.dumps(payload) + "\n").encode())
+    timer_ = create_wall_timer(
+        std::chrono::milliseconds(20),
+        std::bind(&WaterbotBridge::poll_backend, this));
+  }
 
-    def poll_telemetry(self):
-        try:
-            data = self.sock.recv(4096)
-        except BlockingIOError:
-            return
+  ~WaterbotBridge() override {
+    if (sock_fd_ >= 0) {
+      close(sock_fd_);
+    }
+  }
 
-        if not data:
-            return
+private:
+  static int connect_unix_socket(const char *path) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
 
-        self.rx_buf += data
-        while b"\n" in self.rx_buf:
-            line, self.rx_buf = self.rx_buf.split(b"\n", 1)
-            msg = json.loads(line.decode())
-            self.handle_msg(msg)
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
 
-    def handle_msg(self, msg):
-        if "odom" not in msg:
-            return
+    if (connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+      close(fd);
+      return -1;
+    }
 
-        od = msg["odom"]
-        ros_msg = Odometry()
-        ros_msg.pose.pose.position.x = od["x"]
-        ros_msg.pose.pose.position.y = od["y"]
-        ros_msg.twist.twist.linear.x = od["linear_mps"]
-        ros_msg.twist.twist.angular.z = od["angular_rad_s"]
-        self.odom_pub.publish(ros_msg)
+    return fd;
+  }
 
+  void on_cmd_vel(const geometry_msgs::msg::Twist::SharedPtr msg) {
+    nlohmann::json payload = {
+        {"velocity",
+         {{"linear_mps", msg->linear.x},
+          {"angular_rad_s", msg->angular.z},
+          {"valid_for_ms", 100}}}};
 
-def main():
-    rclpy.init()
-    node = WaterbotBridge()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    auto line = payload.dump() + "\n";
+    ::send(sock_fd_, line.data(), line.size(), 0);
+  }
+
+  void poll_backend() {
+    char buf[4096];
+    const ssize_t n = ::recv(sock_fd_, buf, sizeof(buf), MSG_DONTWAIT);
+    if (n <= 0) return;
+
+    rx_buf_.append(buf, static_cast<size_t>(n));
+
+    std::size_t pos = 0;
+    while ((pos = rx_buf_.find('\n')) != std::string::npos) {
+      std::string line = rx_buf_.substr(0, pos);
+      rx_buf_.erase(0, pos + 1);
+      handle_line(line);
+    }
+  }
+
+  void handle_line(const std::string &line) {
+    auto msg = nlohmann::json::parse(line, nullptr, false);
+    if (msg.is_discarded()) return;
+    if (!msg.contains("odom")) return;
+
+    const auto &od = msg["odom"];
+
+    nav_msgs::msg::Odometry out;
+    out.pose.pose.position.x = od.value("x", 0.0);
+    out.pose.pose.position.y = od.value("y", 0.0);
+    out.twist.twist.linear.x = od.value("linear_mps", 0.0);
+    out.twist.twist.angular.z = od.value("angular_rad_s", 0.0);
+
+    odom_pub_->publish(out);
+  }
+
+  int sock_fd_{-1};
+  std::string rx_buf_;
+
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  rclcpp::TimerBase::SharedPtr timer_;
+};
+
+int main(int argc, char **argv) {
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<WaterbotBridge>();
+  rclcpp::spin(node);
+  rclcpp::shutdown();
+  return 0;
+}
 ```
 
 That is the whole pattern:
