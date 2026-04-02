@@ -5,6 +5,8 @@
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     zig-overlay.url = "github:mitchellh/zig-overlay";
+    nix-ros-overlay.url = "github:lopsided98/nix-ros-overlay/master";
+    nix-ros-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -12,6 +14,7 @@
       self,
       nixpkgs,
       zig-overlay,
+      nix-ros-overlay,
       flake-utils,
     }:
     flake-utils.lib.eachDefaultSystem (

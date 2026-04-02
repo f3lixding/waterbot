@@ -7,6 +7,7 @@ Related reading:
 - [USB camera streaming on Linux](./usb-camera-streaming.md)
 - [Control architecture](./control-architecture.md)
 - [ROS adoption and Zig integration](./ros-adoption-and-integration.md)
+- [ROS simulation options](./ros-simulation-options.md)
 
 ## Abstract
 
