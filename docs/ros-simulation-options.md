@@ -53,6 +53,9 @@ For a stable beginner path, use the officially supported pairing of
 Avoid older tutorials based on `Gazebo Classic` unless there is a specific
 reason to follow legacy material.
 
+If using `NixOS`, expect extra packaging and runtime work because that is not
+the primary upstream path. See [Gazebo on NixOS](./gazebo-on-nixos.md).
+
 ### `Webots`
 
 Good alternative if a friendlier desktop simulator is preferred.
