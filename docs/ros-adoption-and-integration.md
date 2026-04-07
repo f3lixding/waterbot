@@ -163,16 +163,15 @@ So the honest answer is:
 
 ## Recommended libraries to reuse
 
-As of March 31, 2026, and based on the current codebase being Zig-first with
-custom GPIO, HTTP, channels, and an OpenCV bridge, the recommended approach is
-a hybrid one:
+Based on the current codebase being Zig-first with custom GPIO, channels, and
+an OpenCV bridge, the recommended approach is a hybrid one:
 
-- keep Zig for low-level control and your project-specific logic
-- reuse ROS 2 packages as separate processes/nodes for the hard generic
-  robotics pieces
+- keep Zig for the robot-specific executive, safety policy, low-level motor
+  control, watering logic, and plant registry
+- reuse ROS 2 packages as separate nodes for the hard generic robotics pieces
 
-That last part is an inference from the current codebase plus the current ROS
-ecosystem, not a direct source claim.
+This is a design recommendation for WATERBOT. It is not a claim that ROS
+requires this split.
 
 ### Recommended libraries
 
@@ -180,11 +179,8 @@ ecosystem, not a direct source claim.
   This is the best fit for the planned 2D LiDAR path and is already aligned
   with the project docs.
 - `Navigation / planning / recovery`: [navigation2](https://github.com/ros-navigation/navigation2).
-  If you want a smaller entry point, study and use
-  [nav2_velocity_smoother](https://github.com/ros-navigation/navigation2/tree/main/nav2_velocity_smoother),
-  [nav2_waypoint_follower](https://github.com/ros-navigation/navigation2/tree/main/nav2_waypoint_follower),
-  and later
-  [nav2_bt_navigator](https://github.com/ros-navigation/navigation2/tree/main/nav2_bt_navigator).
+  Treat this as a subsystem you can call into, not necessarily as the owner of
+  the whole robot.
 - `Sensor fusion`: [robot_localization](https://github.com/cra-ros-pkg/robot_localization).
   Use this to fuse wheel odometry, IMU, and later GPS.
 - `IMU preprocessing`: [imu_tools](https://github.com/CCNYRoboticsLab/imu_tools).
@@ -210,44 +206,64 @@ ecosystem, not a direct source claim.
 
 ### What to actually choose for WATERBOT
 
-- Reuse now: `rplidar_ros`, `slam_toolbox`, `robot_localization`,
-  `navigation2`, `tf2`, `rviz2`, `rosbag2`
-- Reuse later: `micro_ros_espidf_component` if control is offloaded to ESP32-S3
+- Reuse now: `rplidar_ros`, `slam_toolbox`, `robot_localization`, `tf2`,
+  `rviz2`, `rosbag2`
+- Reuse once autonomous movement is in scope: `navigation2`
 - Maybe reuse: `usb_cam` + `cv_bridge` only if the camera pipeline should live
   inside ROS
-- Keep custom: the Zig motor/control loop, watering logic, plant registry, and
-  mission-specific behavior
+- Reuse later: `micro_ros_espidf_component` if control is offloaded to ESP32-S3
+- Keep custom: Zig mission executive, motor/control loop, watering logic,
+  plant registry, fault handling, and robot-specific behavior
 
 ### One important recommendation
 
 Do not spend time hunting for a Zig ROS client library right now. The lower-risk
 path is:
 
-- Zig process for low-level/project-specific logic
+- Zig processes for executive logic and hardware control
 - ROS packages for autonomy and tooling
 - a narrow bridge between them
 
 ## What the Zig <-> ROS boundary should look like
 
-With the current repo, the cleanest interface is:
+There are two different boundaries worth separating. Mixing them together is
+what makes ROS architecture discussions feel confusing.
 
-- `ROS 2 side`: owns LiDAR, IMU, SLAM, localization, navigation
-- `Zig side`: owns motors, watering hardware, and the custom control/runtime
-- `Bridge`: a small ROS node that translates ROS topics/actions into the Zig
-  socket protocol
+### 1. Mission boundary
 
-That matches the existing code in:
+This is the boundary that matches the current WATERBOT direction and should be
+the primary architecture for the project.
 
-- `pkgs/main_compute/src/protocol.zig`
-- `pkgs/main_compute/src/main.zig`
-- `pkgs/main_compute/src/Server.zig`
+- `Zig side`: mission executive, task sequencing, watering policy, plant
+  registry, safety policy, hardware ownership
+- `ROS 2 side`: sensor drivers where useful, `tf2`, SLAM, localization,
+  perception, path planning, navigation, RViz, rosbag
+- `Bridge`: a small interface that lets Zig ask ROS for autonomy services and
+  lets ROS publish results back
 
-### Recommended boundary
+Typical traffic at this layer:
 
-Instead of trying to make Zig speak ROS directly, make the boundary very small:
+- `Zig -> ROS`: start mapping, stop mapping, set initial pose, navigate to
+  pose, cancel navigation, inspect target
+- `ROS -> Zig`: current pose, localization health, map status, navigation
+  status, detections, obstacle information
 
-- ROS sends `cmd_vel`, `water command`, `mode change`
-- Zig sends back `odometry`, `motor status`, `watering status`, `faults`
+A good mental model is:
+
+`Zig mission executive -> bridge -> ROS autonomy services`
+
+In this model, Zig is still the orchestrator of robot behavior. ROS is the
+runtime where reusable autonomy modules talk to each other.
+
+### 2. Drive boundary
+
+If you later adopt Nav2 or another ROS controller, there is usually a second,
+lower boundary for motion execution:
+
+- ROS planning/controller nodes produce `cmd_vel`
+- Zig consumes that desired motion, applies hardware-specific control, and
+  enforces safety
+- Zig publishes odometry, drive status, and faults back into ROS
 
 A good mental model is:
 
@@ -257,15 +273,57 @@ and
 
 `Zig telemetry -> Unix socket -> bridge node -> ROS topics`
 
-### What the protocol might look like
+This narrower boundary does not make ROS the top-level brain. It only means ROS
+is allowed to request robot motion while Zig keeps the final say over actuation
+and safety.
 
-The current command protocol is directional. The suggested evolution is a narrow
-robot API:
+### Recommended boundary
+
+Start with the mission boundary as the project-level architecture. Add the drive
+boundary only when you want ROS navigation to actively command motion.
+
+That gives you clean layering:
+
+- Zig decides goals, modes, and watering behavior
+- ROS computes map, pose, path, and perception outputs
+- Zig either uses those results directly or delegates moment-to-moment motion
+  execution to Nav2
+
+## What the protocol might look like
+
+At the mission boundary, a narrow API could look like:
 
 ```zig
-pub const Command = union(enum) {
+pub const MissionRequest = union(enum) {
+    start_mapping,
+    stop_mapping,
+    set_initial_pose: Pose2,
+    navigate_to_pose: Pose2,
+    cancel_navigation,
+    inspect_plant: u32,
+};
+
+pub const MissionEvent = union(enum) {
+    pose: Pose2,
+    localization: LocalizationState,
+    navigation: NavigationState,
+    detection: PlantDetection,
+    fault: Fault,
+};
+
+pub const Pose2 = struct {
+    x: f32,
+    y: f32,
+    theta: f32,
+};
+```
+
+If you later add a drive boundary for Nav2, keep that lower-level API even
+smaller:
+
+```zig
+pub const DriveCommand = union(enum) {
     velocity: VelocityCmd,
-    water: WaterCmd,
     estop,
 };
 
@@ -275,14 +333,9 @@ pub const VelocityCmd = struct {
     valid_for_ms: u32 = 100,
 };
 
-pub const WaterCmd = struct {
-    plant_id: u32,
-    ml: f32,
-};
-
-pub const Telemetry = union(enum) {
+pub const DriveTelemetry = union(enum) {
     odom: Odom,
-    status: Status,
+    status: DriveStatus,
     fault: Fault,
 };
 
@@ -293,231 +346,69 @@ pub const Odom = struct {
     linear_mps: f32,
     angular_rad_s: f32,
 };
-
-pub const Status = struct {
-    battery_v: f32,
-    watering: bool,
-};
-
-pub const Fault = struct {
-    code: []const u8,
-};
 ```
+
+Notice the difference:
+
+- the mission boundary is about goals and status
+- the drive boundary is about immediate motion requests and feedback
 
 ## Zig side example
 
-This is the side the repo already mostly has. The main change is that instead
-of the browser/UI being the main client, a ROS bridge node becomes the client.
-
-A control loop sketch in Zig would look like this:
+A Zig mission loop might look like this:
 
 ```zig
-fn controlLoop(rx: Rx, telemetry_tx: TelemetryTx) !void {
-    var desired = VelocityCmd{
-        .linear_mps = 0,
-        .angular_rad_s = 0,
-        .valid_for_ms = 100,
-    };
-
+fn missionLoop(ros: RosClient, registry: *Registry) !void {
     while (true) {
-        const tick_deadline = try instantAfter(20 * std.time.ns_per_ms);
+        const plant = try registry.nextNeedingWater() orelse continue;
 
-        while (rx.recvWithTimeout(tick_deadline)) |cmd| {
-            switch (cmd) {
-                .velocity => |v| desired = v,
-                .water => |w| try watering.start(w),
-                .estop => {
-                    desired.linear_mps = 0;
-                    desired.angular_rad_s = 0;
-                    try motors.stop();
-                },
-            }
-        } else |err| switch (err) {
-            error.Timeout => {},
-            error.Closed => return,
-            else => return err,
-        }
+        try ros.send(.{ .navigate_to_pose = plant.pose });
+        const nav = try ros.waitForNavigation();
 
-        const imu = try estimator.readImu();
-        const odom = try estimator.update(imu);
-        const motor_cmd = controller.compute(desired, odom);
-
-        try motors.apply(motor_cmd);
-        try telemetry_tx.send(.{ .odom = odom });
+        if (nav != .succeeded) continue;
+        try watering.waterPlant(plant.id);
     }
 }
 ```
 
-That is the key idea:
+If you later let Nav2 execute motion, the existing control-loop idea still
+applies below that layer:
 
-- ROS does not tell Zig "left" or "right"
-- ROS tells Zig the desired robot motion
-- Zig owns the hardware-specific actuation and closed-loop correction
-
-## ROS side example
-
-The bridge node can be very small. A separate `C++` ROS node built with
-`rclcpp` is a good fit here if you do not want to introduce a garbage-collected
-runtime into the stack.
-
-Example `rclcpp` bridge:
-
-```cpp
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
-
-#include <cerrno>
-#include <cstring>
-#include <string>
-
-#include <geometry_msgs/msg/twist.hpp>
-#include <nav_msgs/msg/odometry.hpp>
-#include <nlohmann/json.hpp>
-#include <rclcpp/rclcpp.hpp>
-
-class WaterbotBridge : public rclcpp::Node {
-public:
-  WaterbotBridge() : Node("waterbot_bridge") {
-    sock_fd_ = connect_unix_socket("/tmp/main_compute.sock");
-    if (sock_fd_ < 0) {
-      throw std::runtime_error("failed to connect to Zig backend");
-    }
-
-    cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-        "/cmd_vel", 10,
-        std::bind(&WaterbotBridge::on_cmd_vel, this, std::placeholders::_1));
-
-    odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/waterbot/odom", 10);
-
-    timer_ = create_wall_timer(
-        std::chrono::milliseconds(20),
-        std::bind(&WaterbotBridge::poll_backend, this));
-  }
-
-  ~WaterbotBridge() override {
-    if (sock_fd_ >= 0) {
-      close(sock_fd_);
-    }
-  }
-
-private:
-  static int connect_unix_socket(const char *path) {
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-
-    sockaddr_un addr{};
-    addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
-
-    if (connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
-      close(fd);
-      return -1;
-    }
-
-    return fd;
-  }
-
-  void on_cmd_vel(const geometry_msgs::msg::Twist::SharedPtr msg) {
-    nlohmann::json payload = {
-        {"velocity",
-         {{"linear_mps", msg->linear.x},
-          {"angular_rad_s", msg->angular.z},
-          {"valid_for_ms", 100}}}};
-
-    auto line = payload.dump() + "\n";
-    ::send(sock_fd_, line.data(), line.size(), 0);
-  }
-
-  void poll_backend() {
-    char buf[4096];
-    const ssize_t n = ::recv(sock_fd_, buf, sizeof(buf), MSG_DONTWAIT);
-    if (n <= 0) return;
-
-    rx_buf_.append(buf, static_cast<size_t>(n));
-
-    std::size_t pos = 0;
-    while ((pos = rx_buf_.find('\n')) != std::string::npos) {
-      std::string line = rx_buf_.substr(0, pos);
-      rx_buf_.erase(0, pos + 1);
-      handle_line(line);
-    }
-  }
-
-  void handle_line(const std::string &line) {
-    auto msg = nlohmann::json::parse(line, nullptr, false);
-    if (msg.is_discarded()) return;
-    if (!msg.contains("odom")) return;
-
-    const auto &od = msg["odom"];
-
-    nav_msgs::msg::Odometry out;
-    out.pose.pose.position.x = od.value("x", 0.0);
-    out.pose.pose.position.y = od.value("y", 0.0);
-    out.twist.twist.linear.x = od.value("linear_mps", 0.0);
-    out.twist.twist.angular.z = od.value("angular_rad_s", 0.0);
-
-    odom_pub_->publish(out);
-  }
-
-  int sock_fd_{-1};
-  std::string rx_buf_;
-
-  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
-  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
-  rclcpp::TimerBase::SharedPtr timer_;
-};
-
-int main(int argc, char **argv) {
-  rclcpp::init(argc, argv);
-  auto node = std::make_shared<WaterbotBridge>();
-  rclcpp::spin(node);
-  rclcpp::shutdown();
-  return 0;
-}
-```
-
-That is the whole pattern:
-
-- subscribe to ROS topic
-- serialize to the Zig protocol
-- send over UDS
-- read telemetry back
-- republish as ROS topics
+- ROS does not drive GPIO directly
+- ROS requests robot motion through `cmd_vel`
+- Zig owns hardware-specific actuation and closed-loop correction
 
 ## How this fits the current code
 
-Most of the plumbing already exists:
+The current `pkgs/main_compute` code mostly lines up with the lower,
+hardware-facing side of this split:
 
-- command decoding in `pkgs/main_compute/src/protocol.zig`
-- dispatch into a channel in `pkgs/main_compute/src/main.zig`
-- a socket-serving pattern in `pkgs/main_compute/src/Server.zig`
+- `pkgs/main_compute/src/protocol.zig`
+- `pkgs/main_compute/src/main.zig`
+- `pkgs/main_compute/src/Server.zig`
 
-So the practical change is:
-
-- keep the Zig daemon
-- shrink or remove the browser-first server path
-- add a ROS bridge node
-- widen the protocol from `left/right/stop` to `velocity/status`
+Those pieces are best thought of as the robot runtime and bridge substrate, not
+as proof that ROS must own the whole autonomy stack.
 
 ## Why this is a good first interface
 
-- Zig stays in control of hardware
-- ROS stays in control of autonomy
-- the boundary is easy to debug with plain JSON
+- Zig stays in control of robot-specific behavior and safety
+- ROS stays focused on reusable autonomy modules and tooling
+- the boundary is easy to debug with plain messages
 - you can test each side independently
-- later, if JSON is replaced with protobuf or a binary format, the architecture
-  still holds
+- you can adopt Nav2 later without rewriting the project-level executive
 
 ## What not to do first
 
 Do not try to:
 
 - embed ROS directly inside Zig via low-level C bindings
-- make Nav2 call the motors directly
 - expose raw GPIO concepts to ROS
+- force watering policy into ROS packages
+- assume there can only be one "orchestrator" in the whole system
 
-That is too much coupling too early.
+Different layers can orchestrate different concerns. For WATERBOT, Zig should
+own mission behavior while ROS owns reusable autonomy subsystems.
 
 ## Source links
 

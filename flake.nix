@@ -3,16 +3,18 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
+    ros-nixpkgs.url = "github:lopsided98/nixpkgs?ref=nix-ros";
     flake-utils.url = "github:numtide/flake-utils";
     zig-overlay.url = "github:mitchellh/zig-overlay";
     nix-ros-overlay.url = "github:lopsided98/nix-ros-overlay/master";
-    nix-ros-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    nix-ros-overlay.inputs.nixpkgs.follows = "ros-nixpkgs";
   };
 
   outputs =
     {
       self,
       nixpkgs,
+      ros-nixpkgs,
       zig-overlay,
       nix-ros-overlay,
       flake-utils,
@@ -46,6 +48,10 @@
                 { }
             )
           ];
+        };
+
+        simBasePkgs = import ros-nixpkgs {
+          inherit system;
         };
 
         zig = pkgs.zigpkgs."0.15.2";
@@ -265,6 +271,19 @@
             exec ${./scripts/flash-raspios} "$@"
           '';
         };
+
+        sim = import ./nix/sim {
+          pkgs = simBasePkgs;
+          inherit system nix-ros-overlay;
+          # TODO: take this out once you had tested it
+          extraRosPackages = ros: [
+            ros.ros-gz-sim-demos
+          ];
+          extraResourcePaths = ros: [
+            "${ros.ros-gz-sim-demos}/share"
+            "$PWD/sim"
+          ];
+        };
       in
       {
         packages =
@@ -321,6 +340,20 @@
             pkgs.opencv
           ];
           shellHook = ''
+            exec ${pkgs.zsh}/bin/zsh
+          '';
+        };
+
+        devShells.sim = pkgs.mkShell {
+          inherit nativeBuildInputs;
+          packages = sim.packages;
+          buildInputs = [
+            pkgs.libgpiod
+            pkgs.libv4l
+            pkgs.opencv
+          ];
+          shellHook = ''
+            ${sim.shellHook}
             exec ${pkgs.zsh}/bin/zsh
           '';
         };
