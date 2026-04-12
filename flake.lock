@@ -56,7 +56,7 @@
       "inputs": {
         "flake-utils": "flake-utils_2",
         "nixpkgs": [
-          "ros-nixpkgs"
+          "nixpkgs"
         ]
       },
       "locked": {

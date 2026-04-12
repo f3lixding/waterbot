@@ -7,7 +7,7 @@
     flake-utils.url = "github:numtide/flake-utils";
     zig-overlay.url = "github:mitchellh/zig-overlay";
     nix-ros-overlay.url = "github:lopsided98/nix-ros-overlay/master";
-    nix-ros-overlay.inputs.nixpkgs.follows = "ros-nixpkgs";
+    nix-ros-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
