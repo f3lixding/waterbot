@@ -4,6 +4,7 @@
   nix-ros-overlay,
 }:
 let
+  lib = pkgs.lib;
   jazzy = import ./mk-jazzy-pkgs.nix {
     inherit pkgs system nix-ros-overlay;
   };
@@ -14,6 +15,14 @@ in
   rosEnv =
     with jazzy.ros;
     buildEnv {
-      paths = [ ros-core ];
+      paths = [
+        ros-core
+        rcl
+        (lib.getDev rcl)
+        rcutils
+        (lib.getDev rcutils)
+        rosidl-runtime-c
+        (lib.getDev rosidl-runtime-c)
+      ];
     };
 }
