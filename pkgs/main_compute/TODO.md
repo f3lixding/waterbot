@@ -2,116 +2,121 @@
 
 ## Direction
 
-`main_compute` should become the low-level robot daemon.
+The most immediate milestone is no longer to finish `main_compute` as a
+hardware-first low-level daemon.
 
-It should own:
+The most immediate milestone is to replicate a simple scene with a simple car
+in `Gazebo`, run it through `ROS 2`, and prove that WATERBOT code can command
+the simulated vehicle and observe what actually happened.
 
-- motor actuation
-- safety stop / watchdog behavior
-- IMU-driven heading stabilization
-- watering actuator control
-- a narrow socket protocol for commands and telemetry
+`main_compute` still matters in this milestone, but mainly as the place where
+the actuation boundary gets cleaned up so the same control path can target:
 
-It should not try to own:
+- real GPIO on hardware
+- a simulation transport for Gazebo work
 
-- SLAM
-- Nav2
-- ROS-native localization
-- high-level autonomy frameworks
+The short-term goal is not a final hardware architecture. The short-term goal
+is to get a fast, honest simulation loop working end to end.
 
-Those should live outside this package and talk to `main_compute` through a
-small interface.
+## Immediate success criteria
 
-## Current priority
+We have reached the milestone when all of the following are true:
 
-Work on mobility and control first.
+- [ ] A reproducible launch starts a Gazebo world with a simple wheeled robot
+- [ ] The robot can be driven from project code, not only from the Gazebo UI
+- [ ] The robot visibly moves, stops, and turns in the simulation
+- [ ] ROS 2 exposes observed state such as `/odom`, `/tf`, and `/joint_states`
+- [ ] Zig updates its logic from observed state rather than assuming commands
+      succeeded
+- [ ] The same high-level actuation path can be built for hardware or
+      simulation
 
-Do not spend time on plant classification, mapping, or full mission logic until
-the robot can do the following reliably:
+## Build-time simulation rule
 
-- accept a velocity-style command
-- stop safely on timeout
-- turn to a heading
-- drive straight while holding heading
+Because some lower-level behavior already lives in Zig, simulation should not
+require rewriting the control path around ROS-only code.
 
-## Milestone 1: turn `main_compute` into a proper low-level daemon
+For simulation builds:
 
-- [ ] Replace direction-only commands with a clearer control protocol
-- [ ] Add `velocity`, `water`, and `estop` command variants
-- [ ] Add telemetry variants such as `odom`, `status`, and `fault`
-- [ ] Keep the Unix domain socket as the main external interface
-- [ ] Treat the browser server as temporary debug tooling, not the long-term API
-- [ ] Keep `mainLoop` focused on low-level actuation and safety
-- [ ] Add watchdog stop / timeout handling for stale commands
-- [ ] Carry command payload values all the way to motor output
+- [ ] Keep Zig responsible for issuing motor or motion intent
+- [ ] Introduce build-time / comptime selection of the actuation backend
+- [ ] Keep the hardware build using real `Gpio`
+- [ ] Add a simulation-side implementation that broadcasts actuation intent
+      instead of toggling pins
+- [ ] Allow that simulation implementation to target `ROS 2` or `Gazebo`
+      transport, whichever is simpler to get working first
+- [ ] Keep the rest of `main_compute` unaware of whether it is talking to
+      hardware or simulation
 
-## Milestone 2: refactor the control loop around fixed-rate ticks
+## Milestone 1: stand up the minimum ROS 2 + Gazebo scene
 
-- [ ] Stop thinking of `mainLoop` as a blocking "wait for command forever" loop
-- [ ] Use a fixed-rate control loop that drains new commands and still ticks on time
-- [ ] Keep actuation as one narrow part of that control loop
-- [ ] Separate desired motion from applied motor output
-- [ ] Introduce a top-level control state struct for current robot state
-- [ ] Introduce a top-level mission / behavior enum for mode tracking
-- [ ] Add clear safety behavior for estop, stale command, and sensor failure
+- [ ] Choose one known-good environment and document the exact bring-up path
+- [ ] Pick the simplest car or differential-drive robot model that can accept
+      commands
+- [ ] Start with a flat world and one or two reference objects
+- [ ] Do not model the full garden yet
+- [ ] Create or capture the launch sequence for Gazebo, the robot model, and
+      required bridge nodes
+- [ ] Verify the robot can be driven manually from the ROS 2 CLI before
+      involving Zig
+- [ ] Record the exact topics, frame names, and message types used by the sim
 
-## Milestone 3: add closed-loop mobility
+## Milestone 2: make `main_compute` simulation-aware
 
-- [ ] Integrate IMU reading into `main_compute`
-- [ ] Add heading estimation
-- [ ] Add a heading controller
-- [ ] Implement `turn to heading`
-- [ ] Implement `drive straight while holding heading`
-- [ ] Define the minimum odometry struct even if only heading is trustworthy at first
-- [ ] Add wheel encoder integration later if and when encoder hardware is available
+- [ ] Define the narrow actuation interface that current control code calls
+      into
+- [ ] Refactor `Gpio` usage behind that interface instead of reaching for GPIO
+      directly
+- [ ] Add a simulation backend that emits motor or motion intent
+- [ ] Add build config that selects hardware vs simulation backend
+- [ ] Keep the simulation backend simple enough to support `forward`, `stop`,
+      and `turn` before chasing a perfect protocol
+- [ ] Preserve the option to send intent through `ROS 2` first, then tighten
+      the motor-level interface later if needed
 
-## Milestone 4: decouple perception from actuation
+## Milestone 3: close the observation loop
 
-- [ ] Stop letting perception directly imply motor behavior
-- [ ] Make the perception pipeline publish observations instead
-- [ ] Define an observation type for target visibility / offset / confidence
-- [ ] Keep perception as an input to control logic, not the controller itself
-- [ ] Preserve the current bottlecap targeting path as a debug aid while refactoring
+- [ ] Consume observed state from ROS 2 instead of inferring it from commands
+- [ ] Define the minimum observation type needed for the first sim milestone
+- [ ] Feed back pose, heading, or odometry into Zig as observations
+- [ ] Log commanded vs observed behavior for debugging
+- [ ] Do not advance mission logic on "command sent"
+- [ ] Advance mission logic on "motion observed"
 
-## Milestone 5: define the Zig <-> ROS boundary
+## Milestone 4: stabilize the workflow
 
-- [ ] Keep ROS out of `main_compute` itself
-- [ ] Finalize a socket protocol that can support a ROS bridge
-- [ ] Model ROS-side commands around `cmd_vel`-style motion, not left/right/stop
-- [ ] Emit telemetry in a form that a ROS bridge can republish as topics
-- [ ] Design for a separate `rclcpp` bridge process rather than direct ROS bindings in Zig
-- [ ] Document the protocol fields well enough that the bridge can be built independently
+- [ ] Make the sim bring-up repeatable from the repo
+- [ ] Write down the launch and debug checklist in docs
+- [ ] Capture one smoke-test path: launch, drive forward, turn, stop, inspect
+      topics
+- [ ] Keep the first workflow small enough that it can run before touching
+      perception or watering work
 
-## Milestone 6: improve testability on the PC
+## After this sim milestone works
 
-- [ ] Conditional compilation to assist testing on the PC
-- [ ] Conditionally substitute the GPIO dependency
-- [ ] Conditionally substitute the camera dependency
-- [ ] Add fake IMU / fake actuator paths where useful
-- [ ] Add tests for the control loop state transitions
-- [ ] Add tests for stale-command timeout behavior
-- [ ] Decide whether logging level should stay runtime-derived or be baked in
-
-## After the above is stable
-
-- [ ] Add a small mission controller / state machine above low-level control
-- [ ] Add watering commands: target, duration, and dose
-- [ ] Add watering verification feedback
-- [ ] Add plant registry hooks once pose / map coordinates are available
-- [ ] Add localization inputs once the ROS side is ready
+- [ ] Resume the broader `main_compute` daemon refactor
+- [ ] Add watchdog or stale-command safety behavior
+- [ ] Add fixed-rate control loop cleanup
+- [ ] Revisit IMU integration and heading control
+- [ ] Revisit the Zig <-> ROS boundary with a clearer picture of what the sim
+      actually needs
+- [ ] Only then return to perception-driven behavior, watering logic, and
+      higher-level autonomy
 
 ## Explicitly not next
 
-- [ ] Do not put SLAM or Nav2 logic into `main_compute`
-- [ ] Do not over-invest in the browser control path
-- [ ] Do not spend major time on plant ID before motion control is reliable
-- [ ] Do not tightly couple perception code to motor actuation again
+- [ ] Do not spend time on plant classification for this milestone
+- [ ] Do not jump straight to SLAM or Nav2
+- [ ] Do not require the first sim robot to match the final WATERBOT hardware
+- [ ] Do not lock the design to ROS-only or Gazebo-only transport before the
+      actuation abstraction exists
+- [ ] Do not assume commanded motion is the same as observed motion
 
 ## Suggested implementation order
 
-- [ ] 1. Evolve the command / telemetry protocol
-- [ ] 2. Convert `mainLoop` into a fixed-rate control loop with watchdog behavior
-- [ ] 3. Add IMU integration and heading stabilization
-- [ ] 4. Refactor perception into observations instead of commands
-- [ ] 5. Freeze the Zig <-> ROS socket boundary
-- [ ] 6. Build higher-level behavior only after the low-level daemon is stable
+- [ ] 1. Bring up a simple Gazebo car scene and drive it manually
+- [ ] 2. Record the ROS 2 topics, frames, and command path that make it work
+- [ ] 3. Add a build-selected simulation actuation backend in `main_compute`
+- [ ] 4. Send drive, stop, and turn intent from Zig into the sim
+- [ ] 5. Feed observed state back into Zig
+- [ ] 6. Resume lower-level daemon work only after that loop is proven
