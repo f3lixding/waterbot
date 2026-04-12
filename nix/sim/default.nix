@@ -7,18 +7,12 @@
 }:
 let
   lib = pkgs.lib;
-
-  rosPkgs = import pkgs.path {
-    inherit system;
-    overlays = [
-      (final: prev: {
-        tbb_2022 = if prev ? tbb_2022_0 then prev.tbb_2022_0 else prev.tbb_2022;
-      })
-      nix-ros-overlay.overlays.default
-    ];
+  jazzy = import ../ros/mk-jazzy-pkgs.nix {
+    inherit pkgs system nix-ros-overlay;
   };
+  rosPkgs = jazzy.rosPkgs;
 
-  ros = rosPkgs.rosPackages.jazzy.overrideScope (
+  ros = jazzy.ros.overrideScope (
     rosFinal: rosPrev: {
       # nix-ros-overlay currently has stale fetchpatch hashes for Ogre.
       gz-ogre-next-vendor =
