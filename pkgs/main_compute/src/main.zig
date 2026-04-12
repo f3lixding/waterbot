@@ -10,6 +10,7 @@ const Rx = Mpsc.Rx;
 const logging = @import("logging.zig");
 const Gpio = @import("Gpio.zig");
 const openzv = @import("openzv");
+const ros2 = @import("ros2");
 const Pipeline = @import("processors/Pipeline.zig");
 const PerceptionSpec = @import("pp").PerceptionSpec;
 const PipelineStage = @import("pp").Pipeline.Stage;
@@ -65,6 +66,22 @@ fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
     try streamer.serve(&tx_ctx, onMessage);
 }
 
+fn absolutePathExists(path: []const u8) bool {
+    std.fs.accessAbsolute(path, .{}) catch return false;
+    return true;
+}
+
+fn commandActuatorStubLoop(rx: Rx) !void {
+    const log = std.log.scoped(.main_loop);
+
+    log.warn("running without GPIO device; actuator commands will be logged only", .{});
+
+    while (true) {
+        const received = rx.recv() catch unreachable;
+        log.info("stub actuator received command: {any}", .{received});
+    }
+}
+
 // TODO: rewrite this loop with the following structure:
 //   while (true) {
 //       while (rx.tryRecv()) |cmd| {
@@ -114,6 +131,11 @@ fn commandActuatorSuperLoop(rx: Rx) !void {
 
     // both sets are in the same /dev we only need one path
     const gpio_path = "/dev/gpiochip0";
+
+    if (!absolutePathExists(gpio_path)) {
+        log.warn("GPIO chip missing at {s}", .{gpio_path});
+        return commandActuatorStubLoop(rx);
+    }
 
     log.info("opening gpio chip: {s}", .{gpio_path});
     const chip = try Chip.open(gpio_path);
@@ -171,6 +193,13 @@ fn commandActuatorSuperLoop(rx: Rx) !void {
 /// - Initiate the command actuator loop routine (this is the brain that
 /// actually affects the GPIOs)
 pub fn main() !void {
+    mainImpl() catch |e| {
+        std.debug.print("main_compute failed: {s}\n", .{@errorName(e)});
+        return e;
+    };
+}
+
+fn mainImpl() !void {
     // TODO: learn about different allocator types and choose a better (if
     // there is) to use
     const allocator = std.heap.page_allocator;
@@ -191,22 +220,27 @@ pub fn main() !void {
         break :blk .info;
     };
 
-    var streamer = try preStart(allocator);
-    defer streamer.deinit();
-
     try logging.init(cap_level);
     defer logging.deinit();
+
+    const log = std.log.scoped(.main_entry);
+    var streamer = preStart(allocator) catch |e| {
+        log.err("Failed to initialize Unix socket streamer: {any}", .{e});
+        return e;
+    };
+    defer streamer.deinit();
 
     // This is just here to ensure we can deploy for now
     // TODO: remove this
     const version = openzv.opencvVersionMajor();
-    const log = std.log.scoped(.main_entry);
     log.info("Running OpenCV version: {d}", .{version});
+    log.info("ROS 2 support compiled in: {}", .{ros2.available});
 
     var mpsc = try Mpsc.init(allocator, 10);
     const channel = mpsc.split();
     var tx = channel.tx;
     const rx = channel.rx;
+    const has_video_device = absolutePathExists("/dev/video0");
 
     const dispatch_thread = std.Thread.spawn(.{}, spawnDispatcher, .{ tx, streamer }) catch |e| {
         log.err("Dispatch thread failed to spawn: {any}", .{e});
@@ -217,14 +251,18 @@ pub fn main() !void {
     var bc = BottleCapProcessor.init(allocator);
     defer bc.deinit();
     const bcp = Processor.initAsProcessor(PipelineCtx, BottleCapProcessor, &bc);
-    const stages = [_]PipelineStage{
+    const vision_stages = [_]PipelineStage{
         .{
             .perception = PerceptionSpec{ .Vision = .{} },
             .processor = bcp,
         },
     };
+    if (!has_video_device) {
+        log.warn("video device missing at /dev/video0; vision pipeline disabled", .{});
+    }
+    const stages: []const PipelineStage = if (has_video_device) vision_stages[0..] else &.{};
     var pipeline = Pipeline.init(allocator, .{
-        .stages = stages[0..],
+        .stages = stages,
     }, &tx) catch |e| {
         log.err("Error initializing pipeline: {any}", .{e});
         return e;
@@ -237,12 +275,15 @@ pub fn main() !void {
         return e;
     };
 
-    const cv_pipeline = std.Thread.spawn(.{}, Pipeline.run, .{&pipeline}) catch |e| {
-        log.err("CV pipeline thread failed to spawn: {any}", .{e});
-        return e;
-    };
+    const cv_pipeline: ?std.Thread = if (has_video_device)
+        std.Thread.spawn(.{}, Pipeline.run, .{&pipeline}) catch |e| {
+            log.err("CV pipeline thread failed to spawn: {any}", .{e});
+            return e;
+        }
+    else
+        null;
 
-    defer cv_pipeline.join();
+    defer if (cv_pipeline) |thread| thread.join();
     defer server_thread.join();
     defer dispatch_thread.join();
 

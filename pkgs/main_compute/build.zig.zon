@@ -10,6 +10,7 @@
         },
         .openzv = .{ .path = "../openzv" },
         .perception_pipeline = .{ .path = "../perception_pipeline" },
+        .ros2 = .{ .path = "../ros2" },
     },
     .paths = .{
         "build.zig",

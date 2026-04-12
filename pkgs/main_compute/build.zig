@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
     const opencv_prefix = b.option([]const u8, "opencv-prefix", "Prefix path for OpenCV headers and libraries");
     const cxx_compiler = b.option([]const u8, "cxx-compiler", "Path to the C++ compiler used to build the OpenCV bridge");
     const libstdcpp_dir = b.option([]const u8, "libstdcpp-dir", "Directory containing libstdc++.so for the OpenCV bridge runtime");
+    const ros_prefix = resolvePathOptionFromEnv(b, b.option([]const u8, "ros-prefix", "Prefix path for ROS 2 headers and libraries"), "WATERBOT_ROS_PREFIX");
 
     const httpz = b.dependency("httpz", .{
         .target = target,
@@ -29,6 +30,12 @@ pub fn build(b: *std.Build) void {
         .@"cxx-compiler" = cxx_compiler,
         .@"libstdcpp-dir" = libstdcpp_dir,
     });
+    const ros2 = b.dependency("ros2", .{
+        .target = target,
+        .optimize = optimize,
+        .@"ros-prefix" = ros_prefix,
+        .@"ros-enabled" = ros_prefix != null,
+    });
     const openzv_bridge = openzv.namedLazyPath("openzv_bridge");
     const install_openzv_bridge = b.addInstallFile(openzv_bridge, "lib/libopenzv_bridge.so");
     b.getInstallStep().dependOn(&install_openzv_bridge.step);
@@ -37,6 +44,7 @@ pub fn build(b: *std.Build) void {
         .{ .import_name = "httpz", .module_name = "httpz", .dep = httpz },
         .{ .import_name = "openzv", .module_name = "openzv", .dep = openzv },
         .{ .import_name = "pp", .module_name = "pp", .dep = pp },
+        .{ .import_name = "ros2", .module_name = "ros2", .dep = ros2 },
     };
 
     const main_bin = b.addExecutable(.{
@@ -91,6 +99,22 @@ fn addSharedDeps(c: *std.Build.Step.Compile, deps: []const SharedDeps) void {
     for (deps) |d| {
         c.root_module.addImport(d.import_name, d.dep.module(d.module_name));
     }
+}
+
+fn resolvePathOptionFromEnv(
+    b: *std.Build,
+    provided: ?[]const u8,
+    env_name: []const u8,
+) ?[]const u8 {
+    if (provided) |value| return value;
+
+    const env_value = std.process.getEnvVarOwned(b.allocator, env_name) catch return null;
+    defer b.allocator.free(env_value);
+
+    const trimmed = std.mem.trim(u8, env_value, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    return b.dupe(trimmed);
 }
 
 fn linkOpenzvBridge(c: *std.Build.Step.Compile, bridge_lib: std.Build.LazyPath) void {

@@ -20,6 +20,14 @@ In this model:
 The important point is that this does not create two sources of truth if the
 state ownership is separated correctly.
 
+Because the project started with some lower level functions being in the zig
+side (such as motor control, video feed processing), we need a way to tell
+gazebo when a signal is sent to the motor (so its effect can be simulated)
+without going through ros2. For this we can use buildtime / comptime resolved
+branching, so depending on the build config, the binary for simulation can be
+built with Gpio that actually just broadcasts a message to motor control
+component to either ros2 or directly to gz. 
+
 ## Source of truth
 
 There should be one source of truth per kind of state.

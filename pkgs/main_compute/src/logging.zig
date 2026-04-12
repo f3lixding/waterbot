@@ -23,16 +23,21 @@ pub fn init(cap_level: std.log.Level) !void {
     log_level_set = cap_level;
     if (log_file != null) return;
 
-    log_file = try std.fs.createFileAbsolute(LOG_LOCATION, .{
-        .read = true,
-        .truncate = false,
-    });
+    log_file = std.fs.openFileAbsolute(LOG_LOCATION, .{
+        .mode = .read_write,
+    }) catch |err| switch (err) {
+        error.FileNotFound => try std.fs.createFileAbsolute(LOG_LOCATION, .{
+            .read = true,
+            .truncate = false,
+        }),
+        else => return err,
+    };
 
     // we don't have auto rotate right now so we'll settle for lazy checking
     const stat = try log_file.?.stat();
     if (stat.size > SIZE_UPPERBOUND) {
         log_file.?.close();
-        try std.fs.deleteDirAbsolute(LOG_LOCATION);
+        try std.fs.deleteFileAbsolute(LOG_LOCATION);
         log_file = try std.fs.createFileAbsolute(LOG_LOCATION, .{
             .read = true,
             .truncate = false,

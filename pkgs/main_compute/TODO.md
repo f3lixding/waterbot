@@ -18,7 +18,7 @@ the actuation boundary gets cleaned up so the same control path can target:
 The short-term goal is not a final hardware architecture. The short-term goal
 is to get a fast, honest simulation loop working end to end.
 
-## Immediate success criteria
+## Simulation Scaffolding
 
 We have reached the milestone when all of the following are true:
 

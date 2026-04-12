@@ -54,6 +54,18 @@
           inherit system;
         };
 
+        runtimeRosPkgs = import pkgs.path {
+          inherit system;
+          overlays = [
+            (final: prev: {
+              tbb_2022 = if prev ? tbb_2022_0 then prev.tbb_2022_0 else prev.tbb_2022;
+            })
+            nix-ros-overlay.overlays.default
+          ];
+        };
+
+        runtimeRos = runtimeRosPkgs.rosPackages.jazzy;
+
         zig = pkgs.zigpkgs."0.15.2";
         nativeBuildInputs = [
           zig
@@ -67,16 +79,28 @@
         zigTarget = "aarch64-linux-gnu";
 
         mkZigPkg =
-          { name, src }:
+          {
+            name,
+            src,
+            nativeTarget ? false,
+            rosPrefix ? null,
+          }:
           let
-            targetPkgs = if system == "x86_64-linux" then pkgs.pkgsCross.aarch64-multiplatform else pkgs;
+            targetPkgs =
+              if nativeTarget then
+                pkgs
+              else if system == "x86_64-linux" then
+                pkgs.pkgsCross.aarch64-multiplatform
+              else
+                pkgs;
             effectiveSrc =
               if name == "main_compute" then
                 pkgs.runCommandLocal "main_compute-src" { } ''
-                  mkdir -p "$out/main_compute" "$out/openzv"
+                  mkdir -p "$out/main_compute" "$out/openzv" "$out/perception_pipeline" "$out/ros2"
                   cp -R ${src}/. "$out/main_compute/"
                   cp -R ${pkgsDir + "/openzv"}/. "$out/openzv/"
                   cp -R ${pkgsDir + "/perception_pipeline"}/. "$out/perception_pipeline/"
+                  cp -R ${pkgsDir + "/ros2"}/. "$out/ros2/"
                 ''
               else
                 src;
@@ -84,12 +108,20 @@
               "openzv"
               "main_compute"
             ];
-            extraBuildInputs = pkgs.lib.optionals needsOpenzvToolchain [ targetPkgs.opencv ];
+            rosEnabled = rosPrefix != null;
+            rosLibDir = if rosEnabled then "${toString rosPrefix}/lib" else null;
+            targetFlag = if nativeTarget || system != "x86_64-linux" then "" else "-Dtarget=${zigTarget}";
+            extraBuildInputs =
+              pkgs.lib.optionals needsOpenzvToolchain [ targetPkgs.opencv ]
+              ++ pkgs.lib.optionals rosEnabled [ rosPrefix ];
             extraBuildFlags =
               pkgs.lib.optionals needsOpenzvToolchain [
                 "-Dopencv-prefix=${targetPkgs.opencv}"
                 "-Dcxx-compiler=${targetPkgs.stdenv.cc}/bin/${targetPkgs.stdenv.cc.targetPrefix}c++"
                 "-Dlibstdcpp-dir=${targetPkgs.stdenv.cc.cc.lib}/lib"
+              ]
+              ++ pkgs.lib.optionals (name == "main_compute" && rosEnabled) [
+                "-Dros-prefix=${toString rosPrefix}"
               ]
               ++ pkgs.lib.optionals (name == "openzv") [
                 "-Dldso-path=${targetPkgs.stdenv.cc.libc.out}/lib/ld-linux-aarch64.so.1"
@@ -121,7 +153,7 @@
 
             src = effectiveSrc;
             dontUnpack = name == "main_compute";
-            postPhases = [ "rewriteBundledRpathsPhase" ];
+            dontConfigure = true;
             inherit nativeBuildInputs;
             buildInputs = [
               targetPkgs.libgpiod
@@ -148,8 +180,7 @@
 
             buildPhase = ''
               runHook preBuild
-              zig build \
-                -Dtarget=${zigTarget} \
+              zig build ${targetFlag} \
                 -Doptimize=ReleaseSafe \
                 -Dgpiod-prefix=${targetPkgs.libgpiod} \
                 ${pkgs.lib.concatStringsSep " \\\n                " extraBuildFlags} \
@@ -202,7 +233,14 @@
               ''}
             '';
 
-            rewriteBundledRpathsPhase = ''
+            preFixup = ''
+              ${pkgs.lib.optionalString nativeTarget ''
+                interpreter_path=""
+                if [[ -n "''${NIX_CC:-}" && -f "$NIX_CC/nix-support/dynamic-linker" ]]; then
+                  interpreter_path="$(<"$NIX_CC/nix-support/dynamic-linker")"
+                fi
+              ''}
+
               if [[ -d "$out/lib" ]]; then
                 find "$out/lib" -maxdepth 1 -type f -name '*.so*' | while read -r lib_path; do
                   if readelf -h "$lib_path" >/dev/null 2>&1; then
@@ -216,7 +254,12 @@
                 for bin_path in "$out"/bin/*; do
                   if [[ -f "$bin_path" && -x "$bin_path" ]]; then
                     chmod u+w "$bin_path"
-                    patchelf --force-rpath --set-rpath '$ORIGIN/../lib' "$bin_path"
+                    ${pkgs.lib.optionalString nativeTarget ''
+                      if [[ -n "$interpreter_path" ]]; then
+                        patchelf --set-interpreter "$interpreter_path" "$bin_path"
+                      fi
+                    ''}
+                    patchelf --force-rpath --set-rpath '$ORIGIN/../lib${pkgs.lib.optionalString rosEnabled ":${rosLibDir}"}' "$bin_path"
                   fi
                 done
               fi
@@ -239,9 +282,21 @@
             value = mkZigPkg {
               inherit name;
               src = pkgsDir + "/${name}";
+              rosPrefix = if name == "main_compute" && system == "aarch64-linux" then mainComputeRosEnv else null;
             };
           }) pkgNames
         );
+
+        mainComputeRosPkg = mkZigPkg {
+          name = "main_compute";
+          src = pkgsDir + "/main_compute";
+          nativeTarget = true;
+          rosPrefix = mainComputeRosEnv;
+        };
+
+        extraPackages = pkgs.lib.optionalAttrs (builtins.elem "main_compute" pkgNames) {
+          "main_compute-ros" = mainComputeRosPkg;
+        };
 
         defaultPkgName =
           if builtins.hasAttr "main_compute" zigPackages then
@@ -284,10 +339,17 @@
             "$PWD/sim"
           ];
         };
+
+        mainComputeRosEnv =
+          with runtimeRos;
+          buildEnv {
+            paths = [ ros-core ];
+          };
       in
       {
         packages =
           zigPackages
+          // extraPackages
           // (if defaultPkgName == null then { } else { default = zigPackages.${defaultPkgName}; });
 
         checks = pkgs.lib.optionalAttrs (builtins.hasAttr "openzv" zigPackages) {
@@ -334,19 +396,21 @@
 
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs;
+          packages = [ mainComputeRosEnv ];
           buildInputs = [
             pkgs.libgpiod
             pkgs.libv4l
             pkgs.opencv
           ];
           shellHook = ''
+            export WATERBOT_ROS_PREFIX="${mainComputeRosEnv}"
             exec ${pkgs.zsh}/bin/zsh
           '';
         };
 
         devShells.sim = pkgs.mkShell {
           inherit nativeBuildInputs;
-          packages = sim.packages;
+          packages = sim.packages ++ [ mainComputeRosEnv ];
           buildInputs = [
             pkgs.libgpiod
             pkgs.libv4l
@@ -354,6 +418,7 @@
           ];
           shellHook = ''
             ${sim.shellHook}
+            export WATERBOT_ROS_PREFIX="${mainComputeRosEnv}"
             exec ${pkgs.zsh}/bin/zsh
           '';
         };
