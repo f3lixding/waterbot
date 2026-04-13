@@ -214,6 +214,8 @@
           packages = [ mainComputeRosEnv ];
           buildInputs = commonShellBuildInputs;
           shellHook = ''
+            # because we might as well
+            ${sim.shellHook}
             export WATERBOT_ROS_PREFIX="${mainComputeRosEnv}"
             exec ${pkgs.zsh}/bin/zsh
           '';
