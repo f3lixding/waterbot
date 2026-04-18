@@ -60,7 +60,13 @@
           inherit system nix-ros-overlay;
         };
 
+        simRos = import ./nix/ros/runtime.nix {
+          pkgs = simRosPkgs;
+          inherit system nix-ros-overlay;
+        };
+
         mainComputeRosEnv = runtimeRos.rosEnv;
+        mainComputeRosEnvSim = simRos.rosEnv;
 
         sim = import ./nix/sim {
           pkgs = simRosPkgs;
@@ -96,6 +102,12 @@
           pkgs.libgpiod
           pkgs.libv4l
           pkgs.opencv
+        ];
+
+        commonShellBuildInputsSim = [
+          simRosPkgs.libgpiod
+          simRosPkgs.libv4l
+          simRosPkgs.opencv
         ];
 
         mkZigPkg = import ./nix/lib/mk-zig-package.nix {
@@ -146,7 +158,7 @@
         exportedPackages =
           zigPackages
           // {
-            # inherit zls;
+            inherit zls;
           }
           // packageVariants
           // (if defaultPkgName == null then { } else { default = zigPackages.${defaultPkgName}; });
@@ -231,11 +243,11 @@
 
         devShells.sim = pkgs.mkShell {
           inherit nativeBuildInputs;
-          packages = sim.packages ++ [ mainComputeRosEnv ];
-          buildInputs = commonShellBuildInputs;
+          packages = sim.packages ++ [ mainComputeRosEnvSim ];
+          buildInputs = commonShellBuildInputsSim;
           shellHook = ''
             ${sim.shellHook}
-            export WATERBOT_ROS_PREFIX="${mainComputeRosEnv}"
+            export WATERBOT_ROS_PREFIX="${mainComputeRosEnvSim}"
             exec ${pkgs.zsh}/bin/zsh
           '';
         };
