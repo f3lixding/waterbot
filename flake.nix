@@ -76,12 +76,17 @@
         };
 
         zig = pkgs.zigpkgs."0.15.2";
+        # change this when we finally are able to move to zig ^0.16.0
+        zls = pkgs.zls;
+        # zls = import ./nix/zls_0_16 {
+        #   inherit pkgs system;
+        # };
         pkgsDir = ./pkgs;
         zigTarget = "aarch64-linux-gnu";
 
         nativeBuildInputs = [
           zig
-          pkgs.zls_0_15
+          zls
           pkgs.binutils
           pkgs.patchelf
           pkgs.pkg-config
@@ -140,6 +145,9 @@
 
         exportedPackages =
           zigPackages
+          // {
+            # inherit zls;
+          }
           // packageVariants
           // (if defaultPkgName == null then { } else { default = zigPackages.${defaultPkgName}; });
 
