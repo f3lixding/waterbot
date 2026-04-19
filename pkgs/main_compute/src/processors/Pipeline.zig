@@ -24,9 +24,9 @@ pipeline: Pipeline,
 allocator: Allocator,
 channel: Mpsc,
 
-pub fn init(allocator: Allocator, pc: PipelineConfig, egress_tx: *EgressTx) !Self {
+pub fn init(allocator: Allocator, pc: PipelineConfig, egress_tx: *EgressTx, io: std.Io) !Self {
     const pipeline = try Pipeline.init(allocator, pc);
-    var channel = try Mpsc.init(allocator, 50);
+    var channel = try Mpsc.init(allocator, 50, io);
     const split = channel.split();
     const order_tx = split.tx;
     const order_rx = split.rx;
@@ -111,11 +111,11 @@ fn commandForOffset(dir: PipelineCtx.Dir) Command {
 
 test "orderUp enqueues order detail" {
     const allocator = std.testing.allocator;
-    var egress_channel = try @import("../channel.zig").Mpsc(Command).init(allocator, 1);
+    var egress_channel = try @import("../channel.zig").Mpsc(Command).init(allocator, 1, std.testing.io);
     defer egress_channel.deinit();
 
     var egress_split = egress_channel.split();
-    var pipeline = try Self.init(allocator, .{ .stages = &.{} }, &egress_split.tx);
+    var pipeline = try Self.init(allocator, .{ .stages = &.{} }, &egress_split.tx, std.testing.io);
     defer pipeline.deinit();
 
     try pipeline.orderUp(.UntilCompliant);

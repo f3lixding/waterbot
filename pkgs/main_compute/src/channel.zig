@@ -13,9 +13,10 @@ pub fn Mpsc(comptime T: type) type {
 
         const State = struct {
             allocator: Allocator,
-            mutex: std.Thread.Mutex = .{},
-            not_empty: std.Thread.Condition = .{},
-            not_full: std.Thread.Condition = .{},
+            io: std.Io,
+            mutex: std.Io.Mutex = .init,
+            not_empty: std.Io.Condition = .init,
+            not_full: std.Io.Condition = .init,
             buffer: []T,
             capacity: usize,
             head: usize = 0,
@@ -29,83 +30,64 @@ pub fn Mpsc(comptime T: type) type {
         pub const Rx = struct {
             state: *State,
 
-            pub fn recvWithTimeout(self: *const Rx, wait_until: std.time.Instant) !T {
+            pub fn recvWithTimeout(self: *const Rx, wait_until: std.Io.Clock.Timestamp) !T {
                 const state = self.state;
-                var lock_acquired: bool = false;
+                while (true) {
+                    return self.tryRecv() catch |err| switch (err) {
+                        error.WouldBlock => {
+                            const now = std.Io.Clock.Timestamp.now(state.io, wait_until.clock);
+                            if (std.Io.Clock.Timestamp.compare(now, .gt, wait_until)) {
+                                return error.Timeout;
+                            }
 
-                defer if (lock_acquired) {
-                    state.mutex.unlock();
-                };
+                            const time_left = now.durationTo(wait_until);
+                            if (time_left.raw.nanoseconds == 0) return error.Timeout;
 
-                while (!lock_acquired) {
-                    if (state.mutex.tryLock()) {
-                        lock_acquired = true;
-                        break;
-                    }
-
-                    const now = try std.time.Instant.now();
-                    switch (now.order(wait_until)) {
-                        .gt => return error.Timeout,
-                        else => {},
-                    }
-
-                    const time_left = wait_until.since(now);
-                    if (time_left == 0) return error.Timeout;
-
-                    std.Thread.sleep(@min(time_left, 1 * std.time.ns_per_ms));
-                }
-
-                while (state.len == 0) {
-                    if (state.closed) return error.Closed;
-
-                    const now = try std.time.Instant.now();
-                    switch (now.order(wait_until)) {
-                        .gt => return error.Timeout,
-                        else => {},
-                    }
-
-                    const time_left = wait_until.since(now);
-                    state.not_empty.timedWait(&state.mutex, time_left) catch |e| switch (e) {
-                        error.Timeout => return error.Timeout,
+                            state.io.sleep(
+                                .fromNanoseconds(@min(
+                                    time_left.raw.nanoseconds,
+                                    @as(i96, 1 * std.time.ns_per_ms),
+                                )),
+                                .awake,
+                            ) catch unreachable;
+                            continue;
+                        },
+                        else => return err,
                     };
                 }
-
-                const item = state.buffer[state.head];
-                state.head = (state.head + 1) % state.capacity;
-                state.len -= 1;
-                state.not_full.signal();
-                return item;
             }
 
             pub fn tryRecv(self: *const Rx) !T {
                 const state = self.state;
-                state.mutex.lock();
-                defer state.mutex.unlock();
+                state.mutex.lockUncancelable(state.io);
+                defer state.mutex.unlock(state.io);
 
-                if (state.closed) return error.Closed;
-                if (state.len == 0) return error.WouldBlock;
+                if (state.len == 0) {
+                    if (state.closed) return error.Closed;
+                    return error.WouldBlock;
+                }
 
                 const item = state.buffer[state.head];
                 state.head = (state.head + 1) % state.capacity;
                 state.len -= 1;
-                state.not_full.signal();
+                state.not_full.signal(state.io);
                 return item;
             }
 
             pub fn recv(self: *const Rx) !T {
                 const state = self.state;
-                state.mutex.lock();
-                defer state.mutex.unlock();
+                state.mutex.lockUncancelable(state.io);
+                defer state.mutex.unlock(state.io);
 
                 while (state.len == 0) {
                     if (state.closed) return error.Closed;
-                    state.not_empty.wait(&state.mutex);
+                    state.not_empty.waitUncancelable(state.io, &state.mutex);
                 }
 
                 const item = state.buffer[state.head];
                 state.head = (state.head + 1) % state.capacity;
                 state.len -= 1;
-                state.not_full.signal();
+                state.not_full.signal(state.io);
                 return item;
             }
         };
@@ -115,8 +97,8 @@ pub fn Mpsc(comptime T: type) type {
 
             pub fn trySend(self: *const Tx, item: T) !void {
                 const state = self.state;
-                state.mutex.lock();
-                defer state.mutex.unlock();
+                state.mutex.lockUncancelable(state.io);
+                defer state.mutex.unlock(state.io);
 
                 if (state.closed) return error.Closed;
                 if (state.len == state.capacity) return error.WouldBlock;
@@ -124,37 +106,37 @@ pub fn Mpsc(comptime T: type) type {
                 state.buffer[state.tail] = item;
                 state.tail = (state.tail + 1) % state.capacity;
                 state.len += 1;
-                state.not_empty.signal();
+                state.not_empty.signal(state.io);
             }
 
             pub fn send(self: *const Tx, item: T) !void {
                 const state = self.state;
-                state.mutex.lock();
-                defer state.mutex.unlock();
+                state.mutex.lockUncancelable(state.io);
+                defer state.mutex.unlock(state.io);
 
                 while (state.len == state.capacity) {
                     if (state.closed) return error.Closed;
-                    state.not_full.wait(&state.mutex);
+                    state.not_full.waitUncancelable(state.io, &state.mutex);
                 }
 
                 state.buffer[state.tail] = item;
                 state.tail = (state.tail + 1) % state.capacity;
                 state.len += 1;
-                state.not_empty.signal();
+                state.not_empty.signal(state.io);
             }
 
             pub fn close(self: *const Tx) void {
                 const state = self.state;
-                state.mutex.lock();
-                defer state.mutex.unlock();
+                state.mutex.lockUncancelable(state.io);
+                defer state.mutex.unlock(state.io);
 
                 state.closed = true;
-                state.not_empty.broadcast();
-                state.not_full.broadcast();
+                state.not_empty.broadcast(state.io);
+                state.not_full.broadcast(state.io);
             }
         };
 
-        pub fn init(allocator: Allocator, capacity: usize) !Self {
+        pub fn init(allocator: Allocator, capacity: usize, io: std.Io) !Self {
             const state = try allocator.create(State);
             errdefer allocator.destroy(state);
 
@@ -163,6 +145,7 @@ pub fn Mpsc(comptime T: type) type {
 
             state.* = .{
                 .allocator = allocator,
+                .io = io,
                 .buffer = buffer,
                 .capacity = capacity,
             };
@@ -185,26 +168,16 @@ pub fn Mpsc(comptime T: type) type {
     };
 }
 
-fn instantAfter(timeout_ns: u64) !std.time.Instant {
-    var now = try std.time.Instant.now();
-
-    if (@TypeOf(now.timestamp) == u64) {
-        now.timestamp += timeout_ns;
-        return now;
-    }
-
-    const extra_sec = timeout_ns / std.time.ns_per_s;
-    const extra_nsec = timeout_ns % std.time.ns_per_s;
-    const nsec_total = @as(u64, @intCast(now.timestamp.nsec)) + extra_nsec;
-
-    now.timestamp.sec += @intCast(extra_sec + (nsec_total / std.time.ns_per_s));
-    now.timestamp.nsec = @intCast(nsec_total % std.time.ns_per_s);
-    return now;
+fn instantAfter(io: std.Io, timeout_ns: u64) std.Io.Clock.Timestamp {
+    return std.Io.Clock.Timestamp.fromNow(io, .{
+        .raw = .fromNanoseconds(@intCast(timeout_ns)),
+        .clock = .awake,
+    });
 }
 
 test "spsc sends across threads" {
     const testing = std.testing;
-    var channel = try Mpsc(u32).init(testing.allocator, 8);
+    var channel = try Mpsc(u32).init(testing.allocator, 8, testing.io);
     defer channel.deinit();
 
     const parts = channel.split();
@@ -236,14 +209,14 @@ test "spsc sends across threads" {
 
 test "spsc blocks until send from another thread" {
     const testing = std.testing;
-    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    var channel = try Mpsc(u8).init(testing.allocator, 1, testing.io);
     defer channel.deinit();
 
     const parts = channel.split();
 
     const Producer = struct {
         fn run(tx: Mpsc(u8).Tx) void {
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            tx.state.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch unreachable;
             tx.send(42) catch @panic("send failed");
             tx.close();
         }
@@ -259,7 +232,7 @@ test "spsc blocks until send from another thread" {
 
 test "trySend returns WouldBlock when full" {
     const testing = std.testing;
-    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    var channel = try Mpsc(u8).init(testing.allocator, 1, testing.io);
     defer channel.deinit();
 
     const parts = channel.split();
@@ -270,38 +243,47 @@ test "trySend returns WouldBlock when full" {
 
 test "recvWithTimeout returns buffered item immediately" {
     const testing = std.testing;
-    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    var channel = try Mpsc(u8).init(testing.allocator, 1, testing.io);
     defer channel.deinit();
 
     const parts = channel.split();
     try parts.tx.trySend(42);
 
-    try testing.expectEqual(@as(u8, 42), try parts.rx.recvWithTimeout(try std.time.Instant.now()));
+    try testing.expectEqual(
+        @as(u8, 42),
+        try parts.rx.recvWithTimeout(std.Io.Clock.Timestamp.now(testing.io, .awake)),
+    );
 }
 
 test "recvWithTimeout drains buffered item after close" {
     const testing = std.testing;
-    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    var channel = try Mpsc(u8).init(testing.allocator, 1, testing.io);
     defer channel.deinit();
 
     const parts = channel.split();
     try parts.tx.trySend(9);
     parts.tx.close();
 
-    try testing.expectEqual(@as(u8, 9), try parts.rx.recvWithTimeout(try std.time.Instant.now()));
-    try testing.expectError(error.Closed, parts.rx.recvWithTimeout(try instantAfter(10 * std.time.ns_per_ms)));
+    try testing.expectEqual(
+        @as(u8, 9),
+        try parts.rx.recvWithTimeout(std.Io.Clock.Timestamp.now(testing.io, .awake)),
+    );
+    try testing.expectError(
+        error.Closed,
+        parts.rx.recvWithTimeout(instantAfter(testing.io, 10 * std.time.ns_per_ms)),
+    );
 }
 
 test "recvWithTimeout returns closed when channel closes while empty" {
     const testing = std.testing;
-    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    var channel = try Mpsc(u8).init(testing.allocator, 1, testing.io);
     defer channel.deinit();
 
     const parts = channel.split();
 
     const Closer = struct {
         fn run(tx: Mpsc(u8).Tx) void {
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            tx.state.io.sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch unreachable;
             tx.close();
         }
     };
@@ -309,15 +291,21 @@ test "recvWithTimeout returns closed when channel closes while empty" {
     const thread = try std.Thread.spawn(.{}, Closer.run, .{parts.tx});
     defer thread.join();
 
-    try testing.expectError(error.Closed, parts.rx.recvWithTimeout(try instantAfter(100 * std.time.ns_per_ms)));
+    try testing.expectError(
+        error.Closed,
+        parts.rx.recvWithTimeout(instantAfter(testing.io, 100 * std.time.ns_per_ms)),
+    );
 }
 
 test "recvWithTimeout times out when no item arrives" {
     const testing = std.testing;
-    var channel = try Mpsc(u8).init(testing.allocator, 1);
+    var channel = try Mpsc(u8).init(testing.allocator, 1, testing.io);
     defer channel.deinit();
 
     const parts = channel.split();
 
-    try testing.expectError(error.Timeout, parts.rx.recvWithTimeout(try instantAfter(20 * std.time.ns_per_ms)));
+    try testing.expectError(
+        error.Timeout,
+        parts.rx.recvWithTimeout(instantAfter(testing.io, 20 * std.time.ns_per_ms)),
+    );
 }

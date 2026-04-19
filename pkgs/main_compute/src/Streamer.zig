@@ -4,39 +4,37 @@ const Self = @This();
 
 const MessageHandler = *const fn (std.mem.Allocator, ?*anyopaque, []const u8) anyerror!void;
 
-fd: i32,
-addr: std.net.Address,
+server: std.Io.net.Server,
 allocator: std.mem.Allocator,
+io: std.Io,
 
 const log = std.log.scoped(.streamer);
 
-pub fn init(allocator: std.mem.Allocator, path: []const u8) !Self {
-    const fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
-    const addr = try std.net.Address.initUnix(path);
-
-    try std.posix.bind(fd, &addr.any, addr.getOsSockLen());
-    try std.posix.listen(fd, 5);
+pub fn init(io: std.Io, allocator: std.mem.Allocator, path: []const u8) !Self {
+    const addr = try std.Io.net.UnixAddress.init(path);
+    const server = try addr.listen(io, .{});
 
     return .{
-        .fd = fd,
-        .addr = addr,
+        .server = server,
         .allocator = allocator,
+        .io = io,
     };
 }
 
 pub fn deinit(self: *Self) void {
-    std.posix.close(self.fd);
+    self.server.deinit(self.io);
 }
 
 const ConnectionContext = struct {
     allocator: std.mem.Allocator,
-    conn_fd: i32,
+    stream: std.Io.net.Stream,
+    io: std.Io,
     user_ctx: ?*anyopaque,
     on_message: MessageHandler,
 
     fn run(self: *ConnectionContext) void {
         defer self.allocator.destroy(self);
-        handleConnection(self.allocator, self.conn_fd, self.user_ctx, self.on_message) catch |err| {
+        handleConnection(self.allocator, self.io, self.stream, self.user_ctx, self.on_message) catch |err| {
             log.err("Connection handler failed: {any}\n", .{err});
         };
     }
@@ -47,16 +45,19 @@ pub fn serve(
     ctx: ?*anyopaque,
     on_message: MessageHandler,
 ) !void {
+    var server = self.server;
+
     while (true) {
-        const conn_fd = try std.posix.accept(self.fd, null, null, 0);
-        errdefer std.posix.close(conn_fd);
+        const stream = try server.accept(self.io);
+        errdefer stream.close(self.io);
 
         log.info("connection accepted\n", .{});
 
         const connection = try self.allocator.create(ConnectionContext);
         connection.* = .{
             .allocator = self.allocator,
-            .conn_fd = conn_fd,
+            .stream = stream,
+            .io = self.io,
             .user_ctx = ctx,
             .on_message = on_message,
         };
@@ -68,16 +69,16 @@ pub fn serve(
 
 fn handleConnection(
     allocator: std.mem.Allocator,
-    conn_fd: i32,
+    io: std.Io,
+    stream: std.Io.net.Stream,
     ctx: ?*anyopaque,
     on_message: MessageHandler,
 ) !void {
-    const file = std.fs.File{ .handle = conn_fd };
-    defer file.close();
+    defer stream.close(io);
 
     var line_buf: [4096]u8 = undefined;
-    var file_reader = file.readerStreaming(&line_buf);
-    const reader = &file_reader.interface;
+    var stream_reader = stream.reader(io, &line_buf);
+    const reader = &stream_reader.interface;
     while (true) {
         const msg = reader.takeDelimiter('\n') catch |err| switch (err) {
             error.StreamTooLong => return error.LineTooLong,

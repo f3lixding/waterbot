@@ -42,7 +42,8 @@ pub const Chip = struct {
 pub const Bridge = struct {
     const pwm_period_ns = 20 * std.time.ns_per_ms;
     const State = struct {
-        mutex: std.Thread.Mutex = .{},
+        io: std.Io,
+        mutex: std.Io.Mutex = .init,
         direction: Direction = .coast,
         speed_percent: u8 = 0,
         running: bool = true,
@@ -76,7 +77,7 @@ pub const Bridge = struct {
     /// Requesting the lines gives this process exclusive use of those GPIOs so
     /// another process cannot also try to drive the same motor-control pins at
     /// the same time.
-    pub fn init(chip: Chip, pins: BridgePins, consumer: [:0]const u8) !Bridge {
+    pub fn init(chip: Chip, pins: BridgePins, consumer: [:0]const u8, io: std.Io) !Bridge {
         const settings = Gpio.gpiod_line_settings_new() orelse return error.OutOfMemory;
         defer Gpio.gpiod_line_settings_free(settings);
 
@@ -115,7 +116,7 @@ pub const Bridge = struct {
 
         const state = try std.heap.page_allocator.create(State);
         errdefer std.heap.page_allocator.destroy(state);
-        state.* = .{};
+        state.* = .{ .io = io };
 
         const worker = try std.Thread.spawn(.{}, pwmWorker, .{ request, state });
 
@@ -127,9 +128,9 @@ pub const Bridge = struct {
     }
 
     pub fn deinit(self: *Bridge) void {
-        self.state.mutex.lock();
+        self.state.mutex.lockUncancelable(self.state.io);
         self.state.running = false;
-        self.state.mutex.unlock();
+        self.state.mutex.unlock(self.state.io);
 
         self.worker.join();
         _ = setValues(self.request, inactiveTriplet()) catch {};
@@ -165,9 +166,9 @@ pub const Bridge = struct {
     pub fn setSpeed(self: *Bridge, speed_percent: u8) !void {
         if (speed_percent > 100) return error.InvalidSpeed;
 
-        self.state.mutex.lock();
+        self.state.mutex.lockUncancelable(self.state.io);
         const direction = self.state.direction;
-        self.state.mutex.unlock();
+        self.state.mutex.unlock(self.state.io);
 
         switch (direction) {
             .forward, .backward => try self.updateState(direction, speed_percent),
@@ -176,8 +177,8 @@ pub const Bridge = struct {
     }
 
     fn updateState(self: *Bridge, direction: Direction, speed_percent: u8) !void {
-        self.state.mutex.lock();
-        defer self.state.mutex.unlock();
+        self.state.mutex.lockUncancelable(self.state.io);
+        defer self.state.mutex.unlock(self.state.io);
 
         self.state.direction = direction;
         self.state.speed_percent = speed_percent;
@@ -196,11 +197,11 @@ pub const Bridge = struct {
         var last_values = inactiveTriplet();
 
         while (true) {
-            state.mutex.lock();
+            state.mutex.lockUncancelable(state.io);
             const running = state.running;
             const direction = state.direction;
             const speed_percent = state.speed_percent;
-            state.mutex.unlock();
+            state.mutex.unlock(state.io);
 
             if (!running) break;
 
@@ -211,25 +212,25 @@ pub const Bridge = struct {
                         setValues(request, values) catch {};
                         last_values = values;
                     }
-                    std.Thread.sleep(pwm_period_ns);
+                    state.io.sleep(.fromNanoseconds(pwm_period_ns), .awake) catch unreachable;
                 },
                 .pwm => |pwm| {
                     if (!tripletsEqual(last_values, pwm.active)) {
                         setValues(request, pwm.active) catch {};
                         last_values = pwm.active;
                     }
-                    std.Thread.sleep(pwm.high_ns);
+                    state.io.sleep(.fromNanoseconds(pwm.high_ns), .awake) catch unreachable;
 
-                    state.mutex.lock();
+                    state.mutex.lockUncancelable(state.io);
                     const still_running = state.running;
-                    state.mutex.unlock();
+                    state.mutex.unlock(state.io);
                     if (!still_running) break;
 
                     if (!tripletsEqual(last_values, pwm.inactive)) {
                         setValues(request, pwm.inactive) catch {};
                         last_values = pwm.inactive;
                     }
-                    std.Thread.sleep(pwm.low_ns);
+                    state.io.sleep(.fromNanoseconds(pwm.low_ns), .awake) catch unreachable;
                 },
             }
         }

@@ -36,6 +36,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const c = @cImport({
+    // glibc fortify wrappers for open/openat trip translate-c in Zig 0.16
+    // during cross compilation. Disable them for this import boundary.
+    @cDefine("_FORTIFY_SOURCE", "0");
     @cInclude("fcntl.h");
     @cInclude("unistd.h");
     @cInclude("errno.h");
@@ -227,7 +230,7 @@ pub const VideoStreamer = struct {
 // This test uses real /dev so it would only pass if the machine running the
 // test has this device
 test "video stream emits bytes" {
-    std.fs.cwd().access(DEFAULT_DEVICE_NAME, .{}) catch return error.SkipZigTest;
+    std.Io.Dir.accessAbsolute(std.testing.io, DEFAULT_DEVICE_NAME, .{}) catch return error.SkipZigTest;
 
     var streamer = VideoStreamer.init(std.testing.allocator, null) catch |err| switch (err) {
         error.BadDevice,

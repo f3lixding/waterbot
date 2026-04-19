@@ -1,9 +1,9 @@
 const std = @import("std");
 const openzv = @import("openzv");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var stdout_buffer: [128]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buffer);
     const stdout = &stdout_writer.interface;
 
     try stdout.print("OpenCV major version: {}\n", .{openzv.opencvVersionMajor()});

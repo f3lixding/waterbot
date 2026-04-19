@@ -114,19 +114,13 @@ pub fn build(b: *std.Build) void {
 fn resolveOpenCvPrefix(b: *std.Build, provided: ?[]const u8) ?[]const u8 {
     if (provided) |prefix| return prefix;
 
-    const result = std.process.Child.run(.{
-        .allocator = b.allocator,
-        .argv = &.{ "pkg-config", "--variable=prefix", "opencv4" },
-    }) catch return null;
-    defer b.allocator.free(result.stdout);
-    defer b.allocator.free(result.stderr);
+    var exit_code: u8 = undefined;
+    const stdout = b.runAllowFail(&.{ "pkg-config", "--variable=prefix", "opencv4" }, &exit_code, .ignore) catch return null;
+    defer b.allocator.free(stdout);
 
-    switch (result.term) {
-        .Exited => |code| if (code != 0) return null,
-        else => return null,
-    }
+    const trimmed = std.mem.trim(u8, stdout, " \t\r\n");
+    if (trimmed.len == 0) return null;
 
-    const trimmed = std.mem.trim(u8, result.stdout, " \t\r\n");
     return b.dupe(trimmed);
 }
 
@@ -175,7 +169,7 @@ fn linkBridge(
     libstdcpp_dir: ?[]const u8,
     bridge_lib: std.Build.LazyPath,
 ) void {
-    c.linkLibC();
+    c.root_module.link_libc = true;
     c.root_module.addLibraryPath(bridge_lib.dirname());
     c.root_module.addRPathSpecial("$ORIGIN/../lib");
     c.root_module.addRPath(bridge_lib.dirname());

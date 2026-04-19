@@ -62,17 +62,22 @@ let
   zigDepsFile = pkgsDir + "/${name}/build.zig.zon.nix";
   zigDeps =
     if builtins.pathExists zigDepsFile then
-      import zigDepsFile {
-        inherit (pkgs)
-          lib
-          linkFarm
-          fetchurl
-          fetchgit
-          runCommandLocal
-          ;
-        inherit zig;
-        name = "zig-packages";
-      }
+      let
+        zigDepsFn = import zigDepsFile;
+        zigDepsArgs = {
+          inherit (pkgs)
+            lib
+            linkFarm
+            fetchurl
+            fetchgit
+            runCommand
+            runCommandLocal
+            ;
+          inherit zig;
+          name = "zig-packages";
+        };
+      in
+      zigDepsFn (builtins.intersectAttrs (builtins.functionArgs zigDepsFn) zigDepsArgs)
     else
       null;
   zigDepsPath = if zigDeps == null then "" else toString zigDeps;
@@ -98,6 +103,7 @@ targetPkgs.stdenv.mkDerivation {
     ''}
     export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
     export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-cache-local"
+    unset NIX_CFLAGS_COMPILE
     mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
     if [ -n "${zigDepsPath}" ]; then
       mkdir -p "$ZIG_GLOBAL_CACHE_DIR/p"

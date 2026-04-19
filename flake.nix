@@ -81,12 +81,11 @@
           ];
         };
 
-        zig = pkgs.zigpkgs."0.15.2";
+        zig = pkgs.zigpkgs."0.16.0";
         # change this when we finally are able to move to zig ^0.16.0
-        zls = pkgs.zls;
-        # zls = import ./nix/zls_0_16 {
-        #   inherit pkgs system;
-        # };
+        zls = import ./nix/zls_0_16 {
+          inherit pkgs system;
+        };
         pkgsDir = ./pkgs;
         zigTarget = "aarch64-linux-gnu";
 
@@ -158,6 +157,7 @@
         exportedPackages =
           zigPackages
           // {
+            inherit zig;
             inherit zls;
           }
           // packageVariants
@@ -203,6 +203,7 @@
               export HOME="$TMPDIR"
               export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
               export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-cache-local"
+              unset NIX_CFLAGS_COMPILE
               mkdir -p "$ZIG_GLOBAL_CACHE_DIR" "$ZIG_LOCAL_CACHE_DIR"
               zig build test \
                 -Doptimize=ReleaseSafe \
@@ -236,6 +237,7 @@
           shellHook = ''
             # because we might as well
             ${sim.shellHook}
+            unset NIX_CFLAGS_COMPILE
             export WATERBOT_ROS_PREFIX="${mainComputeRosEnv}"
             exec ${pkgs.zsh}/bin/zsh
           '';
@@ -247,6 +249,7 @@
           buildInputs = commonShellBuildInputsSim;
           shellHook = ''
             ${sim.shellHook}
+            unset NIX_CFLAGS_COMPILE
             export WATERBOT_ROS_PREFIX="${mainComputeRosEnvSim}"
             exec ${pkgs.zsh}/bin/zsh
           '';

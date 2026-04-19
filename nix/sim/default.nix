@@ -47,7 +47,10 @@ let
           );
 
       rviz-ogre-vendor = rosPrev.rviz-ogre-vendor.overrideAttrs (
-        { postPatch ? "", ... }:
+        {
+          postPatch ? "",
+          ...
+        }:
         {
           # OGRE 1.12.10 needs an explicit policy minimum with newer CMake.
           postPatch = postPatch + ''

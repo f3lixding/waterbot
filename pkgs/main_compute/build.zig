@@ -108,8 +108,7 @@ fn resolvePathOptionFromEnv(
 ) ?[]const u8 {
     if (provided) |value| return value;
 
-    const env_value = std.process.getEnvVarOwned(b.allocator, env_name) catch return null;
-    defer b.allocator.free(env_value);
+    const env_value = b.graph.environ_map.get(env_name) orelse return null;
 
     const trimmed = std.mem.trim(u8, env_value, " \t\r\n");
     if (trimmed.len == 0) return null;
@@ -137,11 +136,11 @@ fn linkGpiod(
     c: *std.Build.Step.Compile,
     gpiod_prefix: ?[]const u8,
 ) void {
-    c.linkLibC();
+    c.root_module.link_libc = true;
 
     if (gpiod_prefix) |prefix| {
-        c.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix, "include" }) });
-        c.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ prefix, "lib" }) });
+        c.root_module.addIncludePath(.{ .cwd_relative = b.pathJoin(&.{ prefix, "include" }) });
+        c.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ prefix, "lib" }) });
     }
 
     c.linker_allow_shlib_undefined = true;

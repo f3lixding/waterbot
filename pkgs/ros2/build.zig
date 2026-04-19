@@ -25,8 +25,8 @@ pub fn build(b: *std.Build) void {
         const prefix = ros_prefix orelse @panic("ros-enabled requires ros-prefix");
         const include_dir = b.pathJoin(&.{ prefix, "include" });
 
-        var include_dir_opened = std.fs.openDirAbsolute(include_dir, .{ .iterate = true }) catch unreachable;
-        defer include_dir_opened.close();
+        var include_dir_opened = std.Io.Dir.openDirAbsolute(b.graph.io, include_dir, .{ .iterate = true }) catch unreachable;
+        defer include_dir_opened.close(b.graph.io);
 
         var include_iter = include_dir_opened.iterate();
 
@@ -35,7 +35,7 @@ pub fn build(b: *std.Build) void {
 
         include_roots.append(b.allocator, include_dir) catch unreachable;
 
-        while (include_iter.next() catch unreachable) |entry| {
+        while (include_iter.next(b.graph.io) catch unreachable) |entry| {
             switch (entry.kind) {
                 .directory, .sym_link => {},
                 else => continue,
@@ -89,8 +89,7 @@ fn resolvePathOptionFromEnv(
 ) ?[]const u8 {
     if (provided) |value| return value;
 
-    const env_value = std.process.getEnvVarOwned(b.allocator, env_name) catch return null;
-    defer b.allocator.free(env_value);
+    const env_value = b.graph.environ_map.get(env_name) orelse return null;
 
     const trimmed = std.mem.trim(u8, env_value, " \t\r\n");
     if (trimmed.len == 0) return null;

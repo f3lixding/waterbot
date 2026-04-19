@@ -36,21 +36,22 @@ pub const PipelineCtx = struct {
     offset_dir: Dir,
 };
 
-fn preStart(allocator: Allocator) !Streamer {
-    if (std.fs.accessAbsolute(SOCKET_PATH, .{})) |_| {
-        try std.fs.deleteFileAbsolute(SOCKET_PATH);
+fn preStart(io: std.Io, allocator: Allocator) !Streamer {
+    if (std.Io.Dir.accessAbsolute(io, SOCKET_PATH, .{})) |_| {
+        try std.Io.Dir.deleteFileAbsolute(io, SOCKET_PATH);
     } else |_| {}
 
-    return try Streamer.init(allocator, SOCKET_PATH);
+    return try Streamer.init(io, allocator, SOCKET_PATH);
 }
 
 fn spawnServer(
+    io: std.Io,
     allocator: Allocator,
     socket_path: []const u8,
     cv_order_tx: *CvOrderTx, // This is for testing only. It dispatches order to the cv pipeline via the UI
 ) !void {
     const Server = @import("Server.zig");
-    try Server.run(allocator, socket_path, cv_order_tx);
+    try Server.run(io, allocator, socket_path, cv_order_tx);
 }
 
 fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
@@ -66,8 +67,8 @@ fn spawnDispatcher(tx: Tx, streamer: Streamer) !void {
     try streamer.serve(&tx_ctx, onMessage);
 }
 
-fn absolutePathExists(path: []const u8) bool {
-    std.fs.accessAbsolute(path, .{}) catch return false;
+fn absolutePathExists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.accessAbsolute(io, path, .{}) catch return false;
     return true;
 }
 
@@ -100,7 +101,7 @@ fn commandActuatorStubLoop(rx: Rx) !void {
 //   }
 //   This would effectively turn this into a
 //   [super loop](https://stackoverflow.com/questions/44429456/what-is-super-loop-in-embedded-c-programming-language)
-fn commandActuatorSuperLoop(rx: Rx) !void {
+fn commandActuatorSuperLoop(io: std.Io, rx: Rx) !void {
     const log = std.log.scoped(.main_loop);
     log.info("command actuator loop initialized", .{});
 
@@ -132,7 +133,7 @@ fn commandActuatorSuperLoop(rx: Rx) !void {
     // both sets are in the same /dev we only need one path
     const gpio_path = "/dev/gpiochip0";
 
-    if (!absolutePathExists(gpio_path)) {
+    if (!absolutePathExists(io, gpio_path)) {
         log.warn("GPIO chip missing at {s}", .{gpio_path});
         return commandActuatorStubLoop(rx);
     }
@@ -143,10 +144,10 @@ fn commandActuatorSuperLoop(rx: Rx) !void {
     log.info("opened gpio chip", .{});
 
     log.info("initializing motor A bridge", .{});
-    var bridge_a = try Bridge.init(chip, motor_a_bridge_pins, "Motor A");
+    var bridge_a = try Bridge.init(chip, motor_a_bridge_pins, "Motor A", io);
     log.info("motor A bridge ready", .{});
     log.info("initializing motor B bridge", .{});
-    var bridge_b = try Bridge.init(chip, motor_b_bridge_pins, "Motor B");
+    var bridge_b = try Bridge.init(chip, motor_b_bridge_pins, "Motor B", io);
     log.info("motor B bridge ready", .{});
     defer bridge_a.deinit();
     defer bridge_b.deinit();
@@ -192,24 +193,19 @@ fn commandActuatorSuperLoop(rx: Rx) !void {
 ///
 /// - Initiate the command actuator loop routine (this is the brain that
 /// actually affects the GPIOs)
-pub fn main() !void {
-    mainImpl() catch |e| {
+pub fn main(init: std.process.Init) !void {
+    mainImpl(init) catch |e| {
         std.debug.print("main_compute failed: {s}\n", .{@errorName(e)});
         return e;
     };
 }
 
-fn mainImpl() !void {
-    // TODO: learn about different allocator types and choose a better (if
-    // there is) to use
-    const allocator = std.heap.page_allocator;
+fn mainImpl(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     const cap_level: std.log.Level = blk: {
-        const cap_level_str = std.process.getEnvVarOwned(allocator, "LOG_LEVEL") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => break :blk .info,
-            else => return err,
-        };
-        defer allocator.free(cap_level_str);
+        const cap_level_str = init.environ_map.get("LOG_LEVEL") orelse break :blk .info;
 
         if (std.mem.eql(u8, cap_level_str, "debug")) break :blk .debug;
         if (std.mem.eql(u8, cap_level_str, "info")) break :blk .info;
@@ -220,11 +216,11 @@ fn mainImpl() !void {
         break :blk .info;
     };
 
-    try logging.init(cap_level);
+    try logging.init(cap_level, io);
     defer logging.deinit();
 
     const log = std.log.scoped(.main_entry);
-    var streamer = preStart(allocator) catch |e| {
+    var streamer = preStart(io, allocator) catch |e| {
         log.err("Failed to initialize Unix socket streamer: {any}", .{e});
         return e;
     };
@@ -236,11 +232,11 @@ fn mainImpl() !void {
     log.info("Running OpenCV version: {d}", .{version});
     log.info("ROS 2 support compiled in: {}", .{ros2.available});
 
-    var mpsc = try Mpsc.init(allocator, 10);
+    var mpsc = try Mpsc.init(allocator, 10, io);
     const channel = mpsc.split();
     var tx = channel.tx;
     const rx = channel.rx;
-    const has_video_device = absolutePathExists("/dev/video0");
+    const has_video_device = absolutePathExists(io, "/dev/video0");
 
     const dispatch_thread = std.Thread.spawn(.{}, spawnDispatcher, .{ tx, streamer }) catch |e| {
         log.err("Dispatch thread failed to spawn: {any}", .{e});
@@ -263,14 +259,14 @@ fn mainImpl() !void {
     const stages: []const PipelineStage = if (has_video_device) vision_stages[0..] else &.{};
     var pipeline = Pipeline.init(allocator, .{
         .stages = stages,
-    }, &tx) catch |e| {
+    }, &tx, io) catch |e| {
         log.err("Error initializing pipeline: {any}", .{e});
         return e;
     };
     const order_tx = &pipeline.order_tx;
     defer pipeline.deinit();
 
-    const server_thread = std.Thread.spawn(.{}, spawnServer, .{ allocator, SOCKET_PATH, order_tx }) catch |e| {
+    const server_thread = std.Thread.spawn(.{}, spawnServer, .{ io, allocator, SOCKET_PATH, order_tx }) catch |e| {
         log.err("Server thread failed to spawn: {any}", .{e});
         return e;
     };
@@ -288,7 +284,7 @@ fn mainImpl() !void {
     defer dispatch_thread.join();
 
     log.info("entering command actuator loop", .{});
-    try commandActuatorSuperLoop(rx);
+    try commandActuatorSuperLoop(io, rx);
 }
 
 test {

@@ -168,10 +168,12 @@ fn directionForCenterX(width: u32, center_x: f32) PipelineCtx.Dir {
 test "test bottlecap pos" {
     const allocator = std.testing.allocator;
     // if test is failing because of no file found make sure to run it at package root!
-    const image = try std.fs.cwd().openFile("testdata/red_bottlecap_left.yuyv", .{});
-    defer image.close();
+    const image = try std.Io.Dir.cwd().openFile(std.testing.io, "testdata/red_bottlecap_left.yuyv", .{});
+    defer image.close(std.testing.io);
 
-    const data = try image.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    var reader_buf: [4096]u8 = undefined;
+    var image_reader = image.readerStreaming(std.testing.io, &reader_buf);
+    const data = try image_reader.interface.allocRemaining(allocator, .limited(10 * 1024 * 1024));
     defer allocator.free(data);
 
     const frame = Frame{

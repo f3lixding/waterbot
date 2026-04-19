@@ -10,6 +10,7 @@ const CvOrderTx = @import("main.zig").CvOrderTx;
 const logging = std.log.scoped(.server);
 
 const Handler = struct {
+    io: std.Io,
     socket_path: []const u8,
     order_tx: ?*CvOrderTx,
 
@@ -18,17 +19,20 @@ const Handler = struct {
 
 const Client = struct {
     conn: *websocket.Conn,
-    backend_stream: std.net.Stream,
+    backend_stream: std.Io.net.Stream,
+    io: std.Io,
 
     const Context = struct {
+        io: std.Io,
         socket_path: []const u8,
     };
 
     pub fn init(conn: *websocket.Conn, ctx: *const Context) !Client {
-        const backend_stream = try connectBackend(ctx.socket_path);
+        const backend_stream = try connectBackend(ctx.io, ctx.socket_path);
         return .{
             .conn = conn,
             .backend_stream = backend_stream,
+            .io = ctx.io,
         };
     }
 
@@ -43,23 +47,27 @@ const Client = struct {
             return;
         };
 
-        try self.backend_stream.writeAll(data);
-        try self.backend_stream.writeAll("\n");
+        var buffer: [1024]u8 = undefined;
+        var writer = self.backend_stream.writer(self.io, &buffer);
+        try writer.interface.writeAll(data);
+        try writer.interface.writeAll("\n");
+        try writer.interface.flush();
         try self.conn.write(data);
     }
 
     pub fn close(self: *Client) void {
-        self.backend_stream.close();
+        self.backend_stream.close(self.io);
     }
 };
 
-pub fn run(allocator: Allocator, socket_path: []const u8, order_tx: ?*CvOrderTx) !void {
+pub fn run(io: std.Io, allocator: Allocator, socket_path: []const u8, order_tx: ?*CvOrderTx) !void {
     var handler = Handler{
+        .io = io,
         .socket_path = socket_path,
         .order_tx = order_tx,
     };
 
-    var server = try httpz.Server(*Handler).init(allocator, .{
+    var server = try httpz.Server(*Handler).init(io, allocator, .{
         .address = .all(PORT),
     }, &handler);
     defer server.deinit();
@@ -225,7 +233,10 @@ fn serveHome(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
 }
 
 fn serveWebsocket(handler: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
-    const ctx = Client.Context{ .socket_path = handler.socket_path };
+    const ctx = Client.Context{
+        .io = handler.io,
+        .socket_path = handler.socket_path,
+    };
 
     if (try httpz.upgradeWebsocket(Client, req, res, &ctx) == false) {
         res.status = 400;
@@ -251,7 +262,6 @@ fn serveCvOrder(handler: *Handler, req: *httpz.Request, res: *httpz.Response) !v
                     res.body = "cv pipeline is closed";
                     return;
                 },
-                else => return err,
             }
         };
         res.status = 202;
@@ -284,7 +294,6 @@ fn serveCvStopOrder(handler: *Handler, req: *httpz.Request, res: *httpz.Response
                     res.body = "cv pipeline is closed";
                     return;
                 },
-                else => return err,
             }
         };
         res.status = 202;
@@ -299,18 +308,12 @@ fn serveCvStopOrder(handler: *Handler, req: *httpz.Request, res: *httpz.Response
     res.body = "cv pipeline unavailable";
 }
 
-fn connectBackend(socket_path: []const u8) !std.net.Stream {
-    const fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
-    errdefer std.posix.close(fd);
-
-    const addr = try std.net.Address.initUnix(socket_path);
-    try std.posix.connect(fd, &addr.any, addr.getOsSockLen());
-
-    return .{ .handle = fd };
+fn connectBackend(io: std.Io, socket_path: []const u8) !std.Io.net.Stream {
+    const addr = try std.Io.net.UnixAddress.init(socket_path);
+    return addr.connect(io);
 }
 
-pub fn main() void {
+pub fn main(init: std.process.Init) void {
     const SOCKET_PATH = "/tmp/main_compute.sock";
-    const allocator = std.heap.page_allocator;
-    run(allocator, SOCKET_PATH, null) catch unreachable;
+    run(init.io, init.gpa, SOCKET_PATH, null) catch unreachable;
 }
