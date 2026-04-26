@@ -9,7 +9,11 @@ const SharedDeps = struct {
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const gpiod_prefix = b.option([]const u8, "gpiod-prefix", "Prefix path for libgpiod headers and libraries");
+    const gpiod_prefix = resolvePathOptionFromEnv(
+        b,
+        b.option([]const u8, "gpiod-prefix", "Prefix path for libgpiod headers and libraries"),
+        "WATERBOT_GPIOD_PREFIX",
+    );
     const opencv_prefix = b.option([]const u8, "opencv-prefix", "Prefix path for OpenCV headers and libraries");
     const cxx_compiler = b.option([]const u8, "cxx-compiler", "Path to the C++ compiler used to build the OpenCV bridge");
     const libstdcpp_dir = b.option([]const u8, "libstdcpp-dir", "Directory containing libstdc++.so for the OpenCV bridge runtime");

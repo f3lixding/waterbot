@@ -238,6 +238,7 @@
             # because we might as well
             ${sim.shellHook}
             unset NIX_CFLAGS_COMPILE
+            export WATERBOT_GPIOD_PREFIX="${pkgs.libgpiod}"
             export WATERBOT_ROS_PREFIX="${mainComputeRosEnv}"
             exec ${pkgs.zsh}/bin/zsh
           '';
@@ -250,6 +251,7 @@
           shellHook = ''
             ${sim.shellHook}
             unset NIX_CFLAGS_COMPILE
+            export WATERBOT_GPIOD_PREFIX="${simRosPkgs.libgpiod}"
             export WATERBOT_ROS_PREFIX="${mainComputeRosEnvSim}"
             exec ${pkgs.zsh}/bin/zsh
           '';
