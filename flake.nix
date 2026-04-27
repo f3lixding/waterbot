@@ -8,6 +8,7 @@
     zig-overlay.url = "github:mitchellh/zig-overlay";
     nix-ros-overlay.url = "github:lopsided98/nix-ros-overlay/master";
     nix-ros-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    nix-ros-gz.url = "github:f3lixding/nix-ros-gz";
   };
 
   outputs =
@@ -16,6 +17,7 @@
       ros-nixpkgs,
       zig-overlay,
       nix-ros-overlay,
+      nix-ros-gz,
       flake-utils,
       ...
     }:
@@ -55,31 +57,52 @@
           inherit system;
         };
 
-        runtimeRos = import ./nix/ros/runtime.nix {
+        rosClientExtraPackages = ros: [
+          ros.turtlesim
+          ros.rqt
+          ros.rqt-common-plugins
+          ros.rqt-service-caller
+          ros.rqt-graph
+          ros.rqt-topic
+        ];
+
+        runtimeRos = nix-ros-gz.lib."build-ros-env" {
           pkgs = pkgs;
           inherit system nix-ros-overlay;
+          extraPackages = rosClientExtraPackages;
         };
 
-        simRos = import ./nix/ros/runtime.nix {
+        simRos = nix-ros-gz.lib."build-ros-env" {
           pkgs = simRosPkgs;
           inherit system nix-ros-overlay;
+          extraPackages = rosClientExtraPackages;
         };
 
         mainComputeRosEnv = runtimeRos.rosEnv;
         mainComputeRosEnvSim = simRos.rosEnv;
 
-        sim = import ./nix/sim {
-          pkgs = simRosPkgs;
-          inherit system nix-ros-overlay;
-          # TODO: take this out once you had tested it
-          extraRosPackages = ros: [
-            ros.ros-gz-sim-demos
-          ];
-          extraResourcePaths = ros: [
-            "${ros.ros-gz-sim-demos}/share"
+        sim =
+          let
+            simArgs = {
+              pkgs = simRosPkgs;
+              inherit system nix-ros-overlay;
+              # Preserve waterbot's current sim shell extras on top of nix-ros-gz.
+              extraRosPackages = ros: [
+                ros.ros-gz-sim-demos
+                ros.sdformat-urdf
+                ros.rviz2
+              ];
+            };
+          in
+          nix-ros-gz.lib.sim simArgs;
+
+        simResourcePathExport = ''
+          export GZ_PARTITION="''${GZ_PARTITION:-gazebo$UID}"
+          export GZ_SIM_RESOURCE_PATH="${pkgs.lib.concatStringsSep ":" [
+            "${sim.ros.ros-gz-sim-demos}/share"
             "$PWD/sim"
-          ];
-        };
+          ]}''${GZ_SIM_RESOURCE_PATH:+:''${GZ_SIM_RESOURCE_PATH}}"
+        '';
 
         zig = pkgs.zigpkgs."0.16.0";
         # change this when we finally are able to move to zig ^0.16.0
@@ -237,6 +260,7 @@
           shellHook = ''
             # because we might as well
             ${sim.shellHook}
+            ${simResourcePathExport}
             unset NIX_CFLAGS_COMPILE
             export WATERBOT_GPIOD_PREFIX="${pkgs.libgpiod}"
             export WATERBOT_ROS_PREFIX="${mainComputeRosEnv}"
@@ -250,6 +274,7 @@
           buildInputs = commonShellBuildInputsSim;
           shellHook = ''
             ${sim.shellHook}
+            ${simResourcePathExport}
             unset NIX_CFLAGS_COMPILE
             export WATERBOT_GPIOD_PREFIX="${simRosPkgs.libgpiod}"
             export WATERBOT_ROS_PREFIX="${mainComputeRosEnvSim}"

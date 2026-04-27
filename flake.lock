@@ -52,6 +52,21 @@
         "type": "github"
       }
     },
+    "nix-ros-gz": {
+      "locked": {
+        "lastModified": 1777255122,
+        "narHash": "sha256-+15hiS2hIorheU6fIzNoj6s9f75DtB6SNSmuQcZp7ic=",
+        "owner": "f3lixding",
+        "repo": "nix-ros-gz",
+        "rev": "a10833ff972fb66d8dfe98b233f693e6a9b7c13a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "f3lixding",
+        "repo": "nix-ros-gz",
+        "type": "github"
+      }
+    },
     "nix-ros-overlay": {
       "inputs": {
         "flake-utils": "flake-utils_2",
@@ -109,6 +124,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "nix-ros-gz": "nix-ros-gz",
         "nix-ros-overlay": "nix-ros-overlay",
         "nixpkgs": "nixpkgs",
         "ros-nixpkgs": "ros-nixpkgs",
